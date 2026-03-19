@@ -353,13 +353,17 @@ FAILURES: integration regression found`);
 
     const db = dbMod.getDb();
     const runRow = db.prepare("SELECT status FROM runs WHERE id = ?").get(run.id) as { status: string };
-    const testRow = db.prepare("SELECT status, output FROM steps WHERE run_id = ? AND step_id = 'test'").get(run.id) as { status: string; output: string };
+    const testRow = db.prepare("SELECT step_index, status, output FROM steps WHERE run_id = ? AND step_id = 'test'").get(run.id) as { step_index: number; status: string; output: string };
     const prRow = db.prepare("SELECT status FROM steps WHERE run_id = ? AND step_id = 'pr'").get(run.id) as { status: string };
+    const downstreamActive = db.prepare(
+      "SELECT step_id, status FROM steps WHERE run_id = ? AND step_index > ? AND status IN ('pending', 'running') ORDER BY step_index ASC"
+    ).all(run.id, testRow.step_index) as Array<{ step_id: string; status: string }>;
 
     assert.equal(runRow.status, "failed", "run should fail closed instead of advancing to PR on tester retry");
     assert.equal(testRow.status, "failed", "tester step should not be recorded as done");
     assert.match(testRow.output, /STATUS: retry/i);
     assert.equal(prRow.status, "waiting", "PR step must stay unclaimed when tester reports retry");
+    assert.deepEqual(downstreamActive, [], "no downstream step should become pending or running after tester retry");
   } finally {
     globalThis.fetch = originalFetch;
     if (originalDbPath === undefined) delete process.env.ANTFARM_DB_PATH;
