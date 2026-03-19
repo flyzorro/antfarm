@@ -194,3 +194,86 @@ test("feature-dev PR step still claims when tester outputs mixed-case markdown k
     fs.rmSync(homeDir, { recursive: true, force: true });
   }
 });
+
+
+test("feature-dev fails closed when tester reports retry instead of done", async () => {
+  const originalHome = process.env.HOME;
+  const originalFetch = globalThis.fetch;
+  const originalDbPath = process.env.ANTFARM_DB_PATH;
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "antfarm-feature-dev-home-"));
+  const dbPath = path.join(homeDir, ".openclaw", "antfarm", `feature-dev-${Date.now()}-${Math.random().toString(16).slice(2)}.db`);
+  process.env.HOME = homeDir;
+  process.env.ANTFARM_DB_PATH = dbPath;
+  fs.mkdirSync(path.join(homeDir, ".openclaw"), { recursive: true });
+  fs.writeFileSync(path.join(homeDir, ".openclaw", "openclaw.json"), JSON.stringify({ agents: { list: [] } }, null, 2));
+
+  globalThis.fetch = mock.fn(async (_url: string, init?: any) => {
+    const body = JSON.parse(init.body);
+    if (body.tool === "cron") {
+      if (body.args.action === "list") {
+        return { ok: true, status: 200, json: async () => ({ ok: true, result: [] }) } as any;
+      }
+      if (body.args.action === "add") {
+        return { ok: true, status: 200, json: async () => ({ ok: true, result: { id: `cron-${Date.now()}` } }) } as any;
+      }
+    }
+    if (body.tool === "sessions_spawn") {
+      return { ok: true, status: 200, json: async () => ({ ok: true, result: { sessionId: `sess-${Date.now()}` } }) } as any;
+    }
+    throw new Error(`unexpected tool ${body.tool}`);
+  }) as any;
+
+  try {
+    const { installWorkflow } = await freshImport<typeof import("../dist/installer/install.js")>("../dist/installer/install.js");
+    const { runWorkflow } = await freshImport<typeof import("../dist/installer/run.js")>("../dist/installer/run.js");
+    const { claimStep, completeStep } = await freshImport<typeof import("../dist/installer/step-ops.js")>("../dist/installer/step-ops.js");
+    const dbMod = await import("../dist/db.js");
+
+    await installWorkflow({ workflowId: "feature-dev" });
+    const run = await runWorkflow({ workflowId: "feature-dev", taskTitle: "Fail closed on tester retry" });
+    await tick();
+
+    completeStep(claimStep("feature-dev_planner").stepId!, `STATUS: done
+REPO: /tmp/repo
+BRANCH: feat/realtime
+STORIES_JSON: [{"id":"story-1","title":"Implement feature","description":"do it","acceptance_criteria":["Tests for feature pass","Typecheck passes"]}]`);
+    await tick();
+    completeStep(claimStep("feature-dev_setup").stepId!, `STATUS: done
+BUILD_CMD: npm run build
+TEST_CMD: npm test
+CI_NOTES: none
+BASELINE: green`);
+    await tick();
+    completeStep(claimStep("feature-dev_developer").stepId!, `STATUS: done
+CHANGES: implemented story
+TESTS: npm test`);
+    await tick();
+    completeStep(claimStep("feature-dev_verifier").stepId!, `STATUS: done
+VERIFIED: story looks good`);
+    await tick();
+
+    const tester = claimStep("feature-dev_tester");
+    assert.equal(tester.found, true);
+    completeStep(tester.stepId!, `STATUS: retry
+FAILURES: integration regression found`);
+    await tick();
+
+    const db = dbMod.getDb();
+    const runRow = db.prepare("SELECT status FROM runs WHERE id = ?").get(run.id) as { status: string };
+    const testRow = db.prepare("SELECT status, output FROM steps WHERE run_id = ? AND step_id = 'test'").get(run.id) as { status: string; output: string };
+    const prRow = db.prepare("SELECT status FROM steps WHERE run_id = ? AND step_id = 'pr'").get(run.id) as { status: string };
+
+    assert.equal(runRow.status, "failed", "run should fail closed instead of advancing to PR on tester retry");
+    assert.equal(testRow.status, "failed", "tester step should not be recorded as done");
+    assert.match(testRow.output, /STATUS: retry/i);
+    assert.equal(prRow.status, "waiting", "PR step must stay unclaimed when tester reports retry");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalDbPath === undefined) delete process.env.ANTFARM_DB_PATH;
+    else process.env.ANTFARM_DB_PATH = originalDbPath;
+    process.env.HOME = originalHome;
+    const dbMod = await import("../dist/db.js");
+    dbMod.closeDbForTests?.();
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  }
+});
