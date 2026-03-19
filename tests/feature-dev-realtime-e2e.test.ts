@@ -196,6 +196,99 @@ test("feature-dev PR step still claims when tester outputs mixed-case markdown k
 });
 
 
+test("feature-dev fails closed before re-claiming a verify_each story that already exhausted retries", async () => {
+  const originalHome = process.env.HOME;
+  const originalFetch = globalThis.fetch;
+  const originalDbPath = process.env.ANTFARM_DB_PATH;
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "antfarm-feature-dev-home-"));
+  const dbPath = path.join(homeDir, ".openclaw", "antfarm", `feature-dev-${Date.now()}-${Math.random().toString(16).slice(2)}.db`);
+  process.env.HOME = homeDir;
+  process.env.ANTFARM_DB_PATH = dbPath;
+  fs.mkdirSync(path.join(homeDir, ".openclaw"), { recursive: true });
+  fs.writeFileSync(path.join(homeDir, ".openclaw", "openclaw.json"), JSON.stringify({ agents: { list: [] } }, null, 2));
+
+  globalThis.fetch = mock.fn(async (_url: string, init?: any) => {
+    const body = JSON.parse(init.body);
+    if (body.tool === "cron") {
+      if (body.args.action === "list") {
+        return { ok: true, status: 200, json: async () => ({ ok: true, result: [] }) } as any;
+      }
+      if (body.args.action === "add") {
+        return { ok: true, status: 200, json: async () => ({ ok: true, result: { id: `cron-${Date.now()}` } }) } as any;
+      }
+    }
+    if (body.tool === "sessions_spawn") {
+      return { ok: true, status: 200, json: async () => ({ ok: true, result: { sessionId: `sess-${Date.now()}` } }) } as any;
+    }
+    throw new Error(`unexpected tool ${body.tool}`);
+  }) as any;
+
+  try {
+    const { installWorkflow } = await freshImport<typeof import("../dist/installer/install.js")>("../dist/installer/install.js");
+    const { runWorkflow } = await freshImport<typeof import("../dist/installer/run.js")>("../dist/installer/run.js");
+    const { claimStep, completeStep } = await freshImport<typeof import("../dist/installer/step-ops.js")>("../dist/installer/step-ops.js");
+    const dbMod = await import("../dist/db.js");
+
+    await installWorkflow({ workflowId: "feature-dev" });
+    const run = await runWorkflow({ workflowId: "feature-dev", taskTitle: "Stop before exhausted verify_each re-claim" });
+    await tick();
+
+    completeStep(claimStep("feature-dev_planner").stepId!, `STATUS: done
+REPO: /tmp/repo
+BRANCH: feat/retry-guard
+STORIES_JSON: [{"id":"story-1","title":"Implement feature","description":"do it","acceptance_criteria":["Tests for feature pass","Typecheck passes"]}]`);
+    await tick();
+    completeStep(claimStep("feature-dev_setup").stepId!, `STATUS: done
+BUILD_CMD: npm run build
+TEST_CMD: npm test
+CI_NOTES: none
+BASELINE: green`);
+    await tick();
+
+    completeStep(claimStep("feature-dev_developer").stepId!, `STATUS: done
+CHANGES: implemented story
+TESTS: npm test`);
+    await tick();
+    completeStep(claimStep("feature-dev_verifier").stepId!, `STATUS: retry
+ISSUES: first verification failure`);
+    await tick();
+
+    completeStep(claimStep("feature-dev_developer").stepId!, `STATUS: done
+CHANGES: retried implementation
+TESTS: npm test`);
+    await tick();
+    completeStep(claimStep("feature-dev_verifier").stepId!, `STATUS: retry
+ISSUES: second verification failure`);
+    await tick();
+
+    const thirdImplement = claimStep("feature-dev_developer");
+    assert.equal(thirdImplement.found, false, "developer must not reclaim a story that already used all retries");
+
+    const db = dbMod.getDb();
+    const runRow = db.prepare("SELECT status FROM runs WHERE id = ?").get(run.id) as { status: string };
+    const implementRow = db.prepare("SELECT status, output FROM steps WHERE run_id = ? AND step_id = 'implement'").get(run.id) as { status: string; output: string };
+    const verifyRow = db.prepare("SELECT status FROM steps WHERE run_id = ? AND step_id = 'verify'").get(run.id) as { status: string };
+    const storyRow = db.prepare("SELECT status, retry_count, max_retries FROM stories WHERE run_id = ? ORDER BY story_index ASC LIMIT 1").get(run.id) as { status: string; retry_count: number; max_retries: number };
+
+    assert.equal(runRow.status, "failed");
+    assert.equal(implementRow.status, "failed");
+    assert.match(implementRow.output, /exhausted retries/i);
+    assert.equal(verifyRow.status, "waiting");
+    assert.equal(storyRow.status, "failed");
+    assert.equal(storyRow.retry_count, 2);
+    assert.equal(storyRow.max_retries, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalDbPath === undefined) delete process.env.ANTFARM_DB_PATH;
+    else process.env.ANTFARM_DB_PATH = originalDbPath;
+    process.env.HOME = originalHome;
+    const dbMod = await import("../dist/db.js");
+    dbMod.closeDbForTests?.();
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
+
 test("feature-dev fails closed when tester reports retry instead of done", async () => {
   const originalHome = process.env.HOME;
   const originalFetch = globalThis.fetch;

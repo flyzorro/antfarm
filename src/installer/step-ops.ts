@@ -650,6 +650,25 @@ export function claimStep(agentId: string): ClaimResult {
         "SELECT * FROM stories WHERE run_id = ? AND status = 'pending' ORDER BY story_index ASC LIMIT 1"
       ).get(step.run_id) as any | undefined;
 
+      if (nextStory && nextStory.retry_count >= nextStory.max_retries) {
+        const message = `Loop cannot continue because story ${nextStory.story_id} exhausted retries (${nextStory.retry_count}/${nextStory.max_retries}) before it could be claimed again`;
+        db.prepare(
+          "UPDATE stories SET status = 'failed', updated_at = datetime('now') WHERE id = ?"
+        ).run(nextStory.id);
+        db.prepare(
+          "UPDATE steps SET status = 'failed', output = ?, current_story_id = NULL, updated_at = datetime('now') WHERE id = ?"
+        ).run(message, step.id);
+        db.prepare(
+          "UPDATE runs SET status = 'failed', updated_at = datetime('now') WHERE id = ?"
+        ).run(step.run_id);
+        const wfId = getWorkflowId(step.run_id);
+        emitEvent({ ts: new Date().toISOString(), event: "story.failed", runId: step.run_id, workflowId: wfId, stepId: step.step_id, storyId: nextStory.story_id, storyTitle: nextStory.title, detail: message });
+        emitEvent({ ts: new Date().toISOString(), event: "step.failed", runId: step.run_id, workflowId: wfId, stepId: step.step_id, detail: message });
+        emitEvent({ ts: new Date().toISOString(), event: "run.failed", runId: step.run_id, workflowId: wfId, detail: message });
+        scheduleRunCronTeardown(step.run_id);
+        return { found: false };
+      }
+
       if (!nextStory) {
         const failedStory = db.prepare(
           "SELECT id FROM stories WHERE run_id = ? AND status = 'failed' LIMIT 1"
