@@ -256,6 +256,7 @@ exit 1
     { mode: 0o755 }
   );
   process.env.PATH = `${binDir}:${process.env.PATH}`;
+  process.env.OPENCLAW_BIN = openclawBin;
 
   globalThis.fetch = (async () => ({
     ok: false,
