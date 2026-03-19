@@ -502,30 +502,50 @@ export function claimStep(agentId: string): ClaimResult {
   }
   const db = getDb();
 
-  const step = db.prepare(
+  const candidates = db.prepare(
     `SELECT s.id, s.step_id, s.run_id, s.input_template, s.type, s.loop_config, s.step_index
      FROM steps s
      JOIN runs r ON r.id = s.run_id
      WHERE s.agent_id = ? AND s.status = 'pending'
        AND r.status NOT IN ('failed', 'cancelled')
-       AND NOT EXISTS (
-         SELECT 1 FROM steps prev
-         WHERE prev.run_id = s.run_id
-           AND prev.step_index < s.step_index
-           AND prev.status NOT IN ('done', 'skipped')
-           AND NOT (
-             prev.type = 'loop'
-             AND prev.status = 'running'
-             AND json_extract(prev.loop_config, '$.verifyStep') = s.step_id
-           )
-       )
-    ORDER BY s.step_index ASC, s.step_id ASC
-     LIMIT 1`
-  ).get(agentId) as {
+     ORDER BY s.step_index ASC, s.step_id ASC`
+  ).all(agentId) as Array<{
     id: string; step_id: string; run_id: string; input_template: string; type: string;
     loop_config: string | null;
     step_index: number;
-  } | undefined;
+  }>;
+
+  const step = candidates.find((candidate) => {
+    const blockers = db.prepare(
+      `SELECT id, step_id, status, type, loop_config, current_story_id
+         FROM steps
+        WHERE run_id = ?
+          AND step_index < ?
+          AND status NOT IN ('done', 'skipped')`
+    ).all(candidate.run_id, candidate.step_index) as Array<{
+      id: string;
+      step_id: string;
+      status: string;
+      type: string;
+      loop_config: string | null;
+      current_story_id: string | null;
+    }>;
+
+    if (blockers.length === 0) return true;
+
+    // Special case: verify_each intentionally runs while the loop step remains "running"
+    // for the current story. Allow the verify step to claim in that case.
+    const loopBlocker = blockers.find((b) => b.type === "loop" && b.status === "running" && b.loop_config);
+    if (!loopBlocker) return false;
+
+    try {
+      const lc: LoopConfig = JSON.parse(loopBlocker.loop_config!);
+      const isVerifyEachHandOff = lc.verifyEach && lc.verifyStep === candidate.step_id;
+      return isVerifyEachHandOff && blockers.every((b) => b.id === loopBlocker.id || b.status === "done" || b.status === "skipped");
+    } catch {
+      return false;
+    }
+  });
 
   if (!step) return { found: false };
 
