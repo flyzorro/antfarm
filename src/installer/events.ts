@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { getDb } from "../db.js";
+import { scheduleRealtimeDispatch } from "./realtime-dispatcher.js";
 
 const EVENTS_DIR = path.join(os.homedir(), ".openclaw", "antfarm");
 const EVENTS_FILE = path.join(EVENTS_DIR, "events.jsonl");
@@ -43,6 +44,9 @@ export function emitEvent(evt: AntfarmEvent): void {
     // best-effort, never throw
   }
   fireWebhook(evt);
+  if (evt.event === "step.pending" && evt.runId && evt.stepId) {
+    scheduleRealtimeDispatch({ runId: evt.runId, stepId: evt.stepId });
+  }
 }
 
 // In-memory cache: runId -> notify_url | null

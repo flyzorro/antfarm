@@ -7,7 +7,7 @@ import { readOpenClawConfig } from "./openclaw-config.js";
 const DEFAULT_EVERY_MS = 300_000; // 5 minutes
 const DEFAULT_AGENT_TIMEOUT_SECONDS = 30 * 60; // 30 minutes
 
-function buildAgentPrompt(workflowId: string, agentId: string): string {
+export function buildAgentPrompt(workflowId: string, agentId: string): string {
   const fullAgentId = `${workflowId}_${agentId}`;
   const cli = resolveAntfarmCli();
 
