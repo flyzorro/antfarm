@@ -61,8 +61,10 @@ async function getGatewayConfig(): Promise<GatewayConfig> {
 
 let cachedBinary: string | null = null;
 
-/** Locate the openclaw binary. Checks PATH, then ~/.npm-global/bin, then npx. */
+/** Locate the openclaw binary. Checks OPENCLAW_BIN, then PATH, then ~/.npm-global/bin, then npx. */
 async function findOpenclawBinary(): Promise<string> {
+  const override = process.env.OPENCLAW_BIN?.trim();
+  if (override) return override;
   if (cachedBinary) return cachedBinary;
 
   // 1. Check PATH via `which`
@@ -149,7 +151,7 @@ export async function createAgentCronJob(job: {
     }
 
     if (job.payload?.timeoutSeconds) {
-      args.push("--timeout", `${job.payload.timeoutSeconds}`);
+      args.push("--timeout-seconds", `${job.payload.timeoutSeconds}`);
     }
 
     if (job.payload?.model) {
@@ -361,6 +363,51 @@ export async function deleteAgentCronJobs(namePrefix: string): Promise<void> {
     if (job.name.startsWith(namePrefix)) {
       await deleteCronJob(job.id);
     }
+  }
+}
+
+export async function spawnAgentSession(params: { agentId: string; task: string; model?: string }): Promise<{ ok: boolean; error?: string }> {
+  const payload = {
+    tool: "sessions_spawn",
+    args: {
+      agentId: params.agentId,
+      task: params.task,
+      ...(params.model ? { model: params.model } : {}),
+    },
+    sessionKey: "agent:main:main",
+  };
+
+  const gateway = await getGatewayConfig();
+  try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (gateway.secret) headers["Authorization"] = `Bearer ${gateway.secret}`;
+
+    const response = await fetch(`${gateway.url}/tools/invoke`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+    });
+
+    if (response.ok) {
+      const result = await response.json();
+      return result.ok ? { ok: true } : { ok: false, error: result.error?.message ?? "Unknown error" };
+    }
+
+    if (!isTransientGatewayFailure(response.status)) {
+      const text = await response.text();
+      return { ok: false, error: `Gateway returned ${response.status}: ${text}` };
+    }
+  } catch {
+    // fallback to CLI
+  }
+
+  try {
+    const args = ["tool", "run", "--tool", "sessions_spawn", "--session", "agent:main:main", "--json", "--agent", params.agentId, "--task", params.task];
+    if (params.model) args.push("--model", params.model);
+    await runCli(args);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: `CLI fallback failed: ${err}. ${UPDATE_HINT}` };
   }
 }
 
