@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 
 const originalFetch = globalThis.fetch;
 const originalHome = process.env.HOME;
+const originalDbPath = process.env.ANTFARM_DB_PATH;
 
 async function freshImport<T>(specifier: string): Promise<T> {
   return import(`${specifier}?t=${Date.now()}-${Math.random()}`) as Promise<T>;
@@ -18,11 +19,16 @@ describe("realtime dispatcher", () => {
   beforeEach(() => {
     homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "antfarm-rt-home-"));
     process.env.HOME = homeDir;
+    process.env.ANTFARM_DB_PATH = path.join(homeDir, ".openclaw", "antfarm", `rt-${Date.now()}-${Math.random().toString(16).slice(2)}.db`);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     globalThis.fetch = originalFetch;
     process.env.HOME = originalHome;
+    if (originalDbPath === undefined) delete process.env.ANTFARM_DB_PATH;
+    else process.env.ANTFARM_DB_PATH = originalDbPath;
+    const dbMod = await import("../dist/db.js");
+    dbMod.closeDbForTests?.();
     fs.rmSync(homeDir, { recursive: true, force: true });
   });
 

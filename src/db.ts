@@ -3,20 +3,40 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
-const DB_DIR = path.join(os.homedir(), ".openclaw", "antfarm");
-const DB_PATH = path.join(DB_DIR, "antfarm.db");
-
 let _db: DatabaseSync | null = null;
 let _dbOpenedAt = 0;
+let _dbPathInUse: string | null = null;
 const DB_MAX_AGE_MS = 5000;
+
+function resolveDbPath(): string {
+  const override = process.env.ANTFARM_DB_PATH?.trim();
+  if (override) return override;
+  return path.join(os.homedir(), ".openclaw", "antfarm", "antfarm.db");
+}
+
+function ensureParentDir(filePath: string): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+}
+
+export function closeDbForTests(): void {
+  if (_db) {
+    try { _db.close(); } catch {}
+  }
+  _db = null;
+  _dbOpenedAt = 0;
+  _dbPathInUse = null;
+}
 
 export function getDb(): DatabaseSync {
   const now = Date.now();
-  if (_db && (now - _dbOpenedAt) < DB_MAX_AGE_MS) return _db;
-  if (_db) { try { _db.close(); } catch {} }
+  const dbPath = resolveDbPath();
+  const shouldReuse = _db && _dbPathInUse === dbPath && (now - _dbOpenedAt) < DB_MAX_AGE_MS;
+  if (shouldReuse) return _db!;
 
-  fs.mkdirSync(DB_DIR, { recursive: true });
-  _db = new DatabaseSync(DB_PATH);
+  closeDbForTests();
+  ensureParentDir(dbPath);
+  _db = new DatabaseSync(dbPath);
+  _dbPathInUse = dbPath;
   _dbOpenedAt = now;
   _db.exec("PRAGMA journal_mode=WAL");
   _db.exec("PRAGMA foreign_keys=ON");
@@ -69,7 +89,6 @@ function migrate(db: DatabaseSync): void {
     );
   `);
 
-  // Add columns to steps table for backwards compat
   const cols = db.prepare("PRAGMA table_info(steps)").all() as Array<{ name: string }>;
   const colNames = new Set(cols.map((c) => c.name));
 
@@ -86,7 +105,6 @@ function migrate(db: DatabaseSync): void {
     db.exec("ALTER TABLE steps ADD COLUMN abandoned_count INTEGER DEFAULT 0");
   }
 
-  // Add columns to runs table for backwards compat
   const runCols = db.prepare("PRAGMA table_info(runs)").all() as Array<{ name: string }>;
   const runColNames = new Set(runCols.map((c) => c.name));
   if (!runColNames.has("notify_url")) {
@@ -94,7 +112,6 @@ function migrate(db: DatabaseSync): void {
   }
   if (!runColNames.has("run_number")) {
     db.exec("ALTER TABLE runs ADD COLUMN run_number INTEGER");
-    // Backfill existing runs with sequential numbers based on creation order
     db.exec(`
       UPDATE runs SET run_number = (
         SELECT COUNT(*) FROM runs r2 WHERE r2.created_at <= runs.created_at
@@ -110,5 +127,5 @@ export function nextRunNumber(): number {
 }
 
 export function getDbPath(): string {
-  return DB_PATH;
+  return resolveDbPath();
 }

@@ -11,8 +11,11 @@ async function freshImport<T>(specifier: string): Promise<T> {
 
 test("claimStep only hands out a pending step once even if called twice back-to-back", async () => {
   const originalHome = process.env.HOME;
+  const originalDbPath = process.env.ANTFARM_DB_PATH;
   const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "antfarm-claim-home-"));
+  const dbPath = path.join(homeDir, ".openclaw", "antfarm", `claim-${Date.now()}-${Math.random().toString(16).slice(2)}.db`);
   process.env.HOME = homeDir;
+  process.env.ANTFARM_DB_PATH = dbPath;
 
   try {
     const { getDb } = await freshImport<typeof import("../dist/db.js")>("../dist/db.js");
@@ -35,7 +38,11 @@ test("claimStep only hands out a pending step once even if called twice back-to-
     const row = db.prepare("SELECT status FROM steps WHERE id = ?").get(stepRowId) as { status: string };
     assert.equal(row.status, "running");
   } finally {
+    if (originalDbPath === undefined) delete process.env.ANTFARM_DB_PATH;
+    else process.env.ANTFARM_DB_PATH = originalDbPath;
     process.env.HOME = originalHome;
+    const dbMod = await import("../dist/db.js");
+    dbMod.closeDbForTests?.();
     fs.rmSync(homeDir, { recursive: true, force: true });
   }
 });

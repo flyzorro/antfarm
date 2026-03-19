@@ -6,34 +6,79 @@ import os from "node:os";
 import crypto from "node:crypto";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
-const tmpHome = path.join(os.tmpdir(), `antfarm-auto-dispatch-${process.pid}-${Date.now()}`);
-const stateDir = path.join(tmpHome, ".openclaw");
-const workflowRoot = path.join(stateDir, "antfarm", "workflows");
-const featureDevDest = path.join(workflowRoot, "feature-dev");
-const configPath = path.join(stateDir, "openclaw.json");
-const eventsPath = path.join(stateDir, "antfarm", "events.jsonl");
 
-process.env.HOME = tmpHome;
-process.env.OPENCLAW_STATE_DIR = stateDir;
-process.env.OPENCLAW_CONFIG_PATH = configPath;
+type Sandbox = {
+  tmpHome: string;
+  stateDir: string;
+  workflowRoot: string;
+  featureDevDest: string;
+  configPath: string;
+  eventsPath: string;
+  dbPath: string;
+};
 
-async function resetSandbox() {
-  await fs.rm(tmpHome, { recursive: true, force: true });
-  await fs.mkdir(featureDevDest, { recursive: true });
-  await fs.cp(path.join(repoRoot, "workflows", "feature-dev"), featureDevDest, { recursive: true });
-  await fs.mkdir(stateDir, { recursive: true });
+function createSandbox(): Sandbox {
+  const tmpHome = path.join(os.tmpdir(), `antfarm-auto-dispatch-${process.pid}-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`);
+  const stateDir = path.join(tmpHome, ".openclaw");
+  return {
+    tmpHome,
+    stateDir,
+    workflowRoot: path.join(stateDir, "antfarm", "workflows"),
+    featureDevDest: path.join(stateDir, "antfarm", "workflows", "feature-dev"),
+    configPath: path.join(stateDir, "openclaw.json"),
+    eventsPath: path.join(stateDir, "antfarm", "events.jsonl"),
+    dbPath: path.join(stateDir, "antfarm", "antfarm.db"),
+  };
+}
+
+function applySandboxEnv(sandbox: Sandbox) {
+  const previous = {
+    HOME: process.env.HOME,
+    OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
+    OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
+    ANTFARM_DB_PATH: process.env.ANTFARM_DB_PATH,
+    OPENCLAW_BIN: process.env.OPENCLAW_BIN,
+    PATH: process.env.PATH,
+    fetch: globalThis.fetch,
+  };
+
+  process.env.HOME = sandbox.tmpHome;
+  process.env.OPENCLAW_STATE_DIR = sandbox.stateDir;
+  process.env.OPENCLAW_CONFIG_PATH = sandbox.configPath;
+  process.env.ANTFARM_DB_PATH = sandbox.dbPath;
+
+  return async () => {
+    globalThis.fetch = previous.fetch;
+    if (previous.HOME === undefined) delete process.env.HOME; else process.env.HOME = previous.HOME;
+    if (previous.OPENCLAW_STATE_DIR === undefined) delete process.env.OPENCLAW_STATE_DIR; else process.env.OPENCLAW_STATE_DIR = previous.OPENCLAW_STATE_DIR;
+    if (previous.OPENCLAW_CONFIG_PATH === undefined) delete process.env.OPENCLAW_CONFIG_PATH; else process.env.OPENCLAW_CONFIG_PATH = previous.OPENCLAW_CONFIG_PATH;
+    if (previous.ANTFARM_DB_PATH === undefined) delete process.env.ANTFARM_DB_PATH; else process.env.ANTFARM_DB_PATH = previous.ANTFARM_DB_PATH;
+    if (previous.OPENCLAW_BIN === undefined) delete process.env.OPENCLAW_BIN; else process.env.OPENCLAW_BIN = previous.OPENCLAW_BIN;
+    if (previous.PATH === undefined) delete process.env.PATH; else process.env.PATH = previous.PATH;
+
+    const dbMod = await import("../dist/db.js");
+    dbMod.closeDbForTests?.();
+    await fs.rm(sandbox.tmpHome, { recursive: true, force: true });
+  };
+}
+
+async function resetSandbox(sandbox: Sandbox) {
+  await fs.rm(sandbox.tmpHome, { recursive: true, force: true });
+  await fs.mkdir(sandbox.featureDevDest, { recursive: true });
+  await fs.cp(path.join(repoRoot, "workflows", "feature-dev"), sandbox.featureDevDest, { recursive: true });
+  await fs.mkdir(sandbox.stateDir, { recursive: true });
   await fs.writeFile(
-    configPath,
+    sandbox.configPath,
     JSON.stringify({
       agents: {
         defaults: { model: "default" },
         list: [
-          { id: "feature-dev_planner", workspace: path.join(stateDir, "workspaces", "planner") },
-          { id: "feature-dev_setup", workspace: path.join(stateDir, "workspaces", "setup") },
-          { id: "feature-dev_developer", workspace: path.join(stateDir, "workspaces", "developer") },
-          { id: "feature-dev_verifier", workspace: path.join(stateDir, "workspaces", "verifier") },
-          { id: "feature-dev_tester", workspace: path.join(stateDir, "workspaces", "tester") },
-          { id: "feature-dev_reviewer", workspace: path.join(stateDir, "workspaces", "reviewer") },
+          { id: "feature-dev_planner", workspace: path.join(sandbox.stateDir, "workspaces", "planner") },
+          { id: "feature-dev_setup", workspace: path.join(sandbox.stateDir, "workspaces", "setup") },
+          { id: "feature-dev_developer", workspace: path.join(sandbox.stateDir, "workspaces", "developer") },
+          { id: "feature-dev_verifier", workspace: path.join(sandbox.stateDir, "workspaces", "verifier") },
+          { id: "feature-dev_tester", workspace: path.join(sandbox.stateDir, "workspaces", "tester") },
+          { id: "feature-dev_reviewer", workspace: path.join(sandbox.stateDir, "workspaces", "reviewer") },
         ],
       },
       gateway: {
@@ -157,11 +202,15 @@ function makeStepOutput(stepId: string): string {
 }
 
 test("feature-dev run self-advances through all seven steps via agent cron polling", async () => {
-  await resetSandbox();
+  const sandbox = createSandbox();
+  const restore = applySandboxEnv(sandbox);
+  await resetSandbox(sandbox);
   const jobs = makeFetchCronMock();
-  const { runWorkflow, claimStep, peekStep, completeStep, getWorkflowStatus, getRunEvents, getDb } = await loadModules();
 
-  const run = await runWorkflow({ workflowId: "feature-dev", taskTitle: "Ship auto-dispatch proof" });
+  try {
+    const { runWorkflow, claimStep, peekStep, completeStep, getWorkflowStatus, getRunEvents, getDb } = await loadModules();
+
+    const run = await runWorkflow({ workflowId: "feature-dev", taskTitle: "Ship auto-dispatch proof" });
   assert.equal(run.status, "running");
   assert.equal(jobs.length, 6, "feature-dev provisions one cron per unique agent");
 
@@ -191,49 +240,54 @@ test("feature-dev run self-advances through all seven steps via agent cron polli
     }
   }
 
-  const finalStatus = getWorkflowStatus(run.id);
-  assert.equal(finalStatus.status, "ok");
-  assert.equal(finalStatus.run.status, "completed");
-  assert.deepEqual(
-    finalStatus.steps.map((step) => [step.step_id, step.status]),
-    [
-      ["plan", "done"],
-      ["setup", "done"],
-      ["implement", "done"],
-      ["verify", "done"],
-      ["test", "done"],
-      ["pr", "done"],
-      ["review", "done"],
-    ],
-    "all seven pipeline steps should finish without manual triggering"
-  );
+    const finalStatus = getWorkflowStatus(run.id);
+    assert.equal(finalStatus.status, "ok");
+    assert.equal(finalStatus.run.status, "completed");
+    assert.deepEqual(
+      finalStatus.steps.map((step) => [step.step_id, step.status]),
+      [
+        ["plan", "done"],
+        ["setup", "done"],
+        ["implement", "done"],
+        ["verify", "done"],
+        ["test", "done"],
+        ["pr", "done"],
+        ["review", "done"],
+      ],
+      "all seven pipeline steps should finish without manual triggering"
+    );
 
-  const storyRows = (db.prepare(
-    "SELECT story_id, status FROM stories WHERE run_id = ? ORDER BY story_index ASC"
-  ).all(run.id) as Array<{ story_id: string; status: string }>).map((row) => ({ ...row }));
-  assert.deepEqual(storyRows, [
-    { story_id: "story-1", status: "done" },
-    { story_id: "story-2", status: "done" },
-  ]);
+    const storyRows = (db.prepare(
+      "SELECT story_id, status FROM stories WHERE run_id = ? ORDER BY story_index ASC"
+    ).all(run.id) as Array<{ story_id: string; status: string }>).map((row) => ({ ...row }));
+    assert.deepEqual(storyRows, [
+      { story_id: "story-1", status: "done" },
+      { story_id: "story-2", status: "done" },
+    ]);
 
-  assert.deepEqual(
-    claimOrder,
-    ["plan", "setup", "implement", "verify", "implement", "verify", "test", "pr", "review"],
-    "cron-driven claims should follow the intended feature-dev pipeline order"
-  );
+    assert.deepEqual(
+      claimOrder,
+      ["plan", "setup", "implement", "verify", "implement", "verify", "test", "pr", "review"],
+      "cron-driven claims should follow the intended feature-dev pipeline order"
+    );
 
-  const events = getRunEvents(run.id);
-  assert.ok(events.some((evt) => evt.event === "run.started"), "run.started emitted");
-  assert.ok(events.some((evt) => evt.event === "story.verified"), "verify_each path executed");
-  assert.ok(events.some((evt) => evt.event === "run.completed"), "run.completed emitted");
+    const events = getRunEvents(run.id);
+    assert.ok(events.some((evt) => evt.event === "run.started"), "run.started emitted");
+    assert.ok(events.some((evt) => evt.event === "story.verified"), "verify_each path executed");
+    assert.ok(events.some((evt) => evt.event === "run.completed"), "run.completed emitted");
+  } finally {
+    await restore();
+  }
 });
 
 test("runWorkflow can start via CLI cron fallback when gateway cron HTTP is unavailable", async () => {
-  await resetSandbox();
+  const sandbox = createSandbox();
+  const restore = applySandboxEnv(sandbox);
+  await resetSandbox(sandbox);
 
-  const binDir = path.join(tmpHome, "bin");
+  const binDir = path.join(sandbox.tmpHome, "bin");
   await fs.mkdir(binDir, { recursive: true });
-  const cliLog = path.join(tmpHome, "openclaw-cli.log");
+  const cliLog = path.join(sandbox.tmpHome, "openclaw-cli.log");
   const openclawBin = path.join(binDir, "openclaw");
   await fs.writeFile(
     openclawBin,
@@ -265,14 +319,18 @@ exit 1
     text: async () => "not found",
   })) as typeof fetch;
 
-  const { runWorkflow, getWorkflowStatus } = await loadModules();
-  const run = await runWorkflow({ workflowId: "feature-dev", taskTitle: "CLI fallback boot" });
+  try {
+    const { runWorkflow, getWorkflowStatus } = await loadModules();
+    const run = await runWorkflow({ workflowId: "feature-dev", taskTitle: "CLI fallback boot" });
 
-  const status = getWorkflowStatus(run.id);
-  assert.equal(status.status, "ok");
-  assert.equal(status.run.status, "running", "run starts even when cron setup needs CLI fallback");
+    const status = getWorkflowStatus(run.id);
+    assert.equal(status.status, "ok");
+    assert.equal(status.run.status, "running", "run starts even when cron setup needs CLI fallback");
 
-  const cliCalls = await fs.readFile(cliLog, "utf-8");
-  assert.match(cliCalls, /cron list --json/, "preflight/list used CLI fallback");
-  assert.match(cliCalls, /cron add --json --name antfarm\/feature-dev\/planner/, "cron creation used CLI fallback");
+    const cliCalls = await fs.readFile(cliLog, "utf-8");
+    assert.match(cliCalls, /cron list --json/, "preflight/list used CLI fallback");
+    assert.match(cliCalls, /cron add --json --name antfarm\/feature-dev\/planner/, "cron creation used CLI fallback");
+  } finally {
+    await restore();
+  }
 });
