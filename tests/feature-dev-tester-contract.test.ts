@@ -15,7 +15,7 @@ test("feature-dev tester contract requires RESULTS for PR handoff in workflow an
   const testerAgents = read(testerAgentsPath);
 
   assert.match(workflow, /RESULTS: What you tested and the outcomes/);
-  assert.match(workflow, /downstream PR step consumes `\{\{results\}\}`/);
+  assert.match(workflow, /downstream PR step consumes the tester `RESULTS` field/);
   assert.match(workflow, /Do not replace `RESULTS:` with generic fields like `CHANGES:` or `TESTS:`/);
 
   assert.match(testerAgents, /downstream PR step reads `RESULTS`/);

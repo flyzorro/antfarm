@@ -292,7 +292,7 @@ steps:
       IMPORTANT:
       - On success, you MUST include a top-level `RESULTS:` line exactly spelled `RESULTS:`
       - Do not replace `RESULTS:` with generic fields like `CHANGES:` or `TESTS:`
-      - The downstream PR step consumes `{{results}}`, so successful tester handoff is invalid without `RESULTS:`
+      - The downstream PR step consumes the tester `RESULTS` field, so successful handoff is invalid without `RESULTS:`
 
       Or if issues found:
       STATUS: retry
