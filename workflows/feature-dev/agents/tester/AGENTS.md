@@ -39,11 +39,24 @@ For UI features, use the browser skill to:
 
 ## Output Format
 
+The workflow contract for a successful tester handoff is strict: the downstream PR step reads `RESULTS`, so every successful completion MUST include a top-level `RESULTS:` line.
+
 If everything passes:
 ```
 STATUS: done
-RESULTS: What you tested and outcomes
+RESULTS: Full-suite summary, integration/E2E coverage, and notable outcomes
 ```
+
+Example:
+```
+STATUS: done
+RESULTS: Ran `npm test` and `npm run build`; verified the end-to-end signup flow in the browser; checked empty-state and error-state handling; all checks passed with no integration regressions found.
+```
+
+Rules:
+- Keep `RESULTS:` as an exact top-level field name
+- Do not replace it with generic success fields like `CHANGES:` or `TESTS:`
+- If you want to mention commands or coverage details, include them in the `RESULTS:` value
 
 If issues found:
 ```
