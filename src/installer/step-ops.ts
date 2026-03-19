@@ -36,12 +36,19 @@ export function parseOutputKeyValues(output: string): Record<string, string> {
   }
 
   for (const line of lines) {
-    const match = line.match(/^([A-Z_]+):\s*(.*)$/);
+    const candidates = [
+      line.match(/^\*\*([A-Za-z_][A-Za-z0-9_]*)\:\*\*\s*(.*)$/),
+      line.match(/^__([A-Za-z_][A-Za-z0-9_]*)__:\s*(.*)$/),
+      line.match(/^\s*[-*+]\s+\*\*([A-Za-z_][A-Za-z0-9_]*)\:\*\*\s*(.*)$/),
+      line.match(/^\s*[-*+]\s+__([A-Za-z_][A-Za-z0-9_]*)__:\s*(.*)$/),
+      line.match(/^([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/),
+    ];
+    const match = candidates.find(Boolean);
     if (match) {
       // New KEY: line found — flush previous key
       commitPending();
-      pendingKey = match[1];
-      pendingValue = match[2];
+      pendingKey = match[1].toUpperCase();
+      pendingValue = match[2] ?? "";
     } else if (pendingKey) {
       // Continuation line — append to current key's value
       pendingValue += "\n" + line;

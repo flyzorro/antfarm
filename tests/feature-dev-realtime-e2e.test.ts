@@ -12,11 +12,28 @@ function tick(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+async function waitFor(assertion: () => void, attempts = 50): Promise<void> {
+  let lastError: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      assertion();
+      return;
+    } catch (err) {
+      lastError = err;
+      await tick();
+    }
+  }
+  throw lastError;
+}
+
 test("feature-dev emits realtime dispatches across the whole 7-step pipeline", async () => {
   const originalHome = process.env.HOME;
   const originalFetch = globalThis.fetch;
+  const originalDbPath = process.env.ANTFARM_DB_PATH;
   const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "antfarm-feature-dev-home-"));
+  const dbPath = path.join(homeDir, ".openclaw", "antfarm", `feature-dev-${Date.now()}-${Math.random().toString(16).slice(2)}.db`);
   process.env.HOME = homeDir;
+  process.env.ANTFARM_DB_PATH = dbPath;
   fs.mkdirSync(path.join(homeDir, ".openclaw"), { recursive: true });
   fs.writeFileSync(path.join(homeDir, ".openclaw", "openclaw.json"), JSON.stringify({ agents: { list: [] } }, null, 2));
 
@@ -85,8 +102,12 @@ test("feature-dev emits realtime dispatches across the whole 7-step pipeline", a
     completeStep(review.stepId!, `STATUS: done\nREVIEW: approved`);
     await tick();
 
+    await waitFor(() => {
+      const spawnCalls = calls.filter((call) => call.tool === "sessions_spawn");
+      assert.equal(spawnCalls.length, 7, "expected one realtime dispatch per feature-dev step");
+    });
+
     const spawnCalls = calls.filter((call) => call.tool === "sessions_spawn");
-    assert.equal(spawnCalls.length, 7, "expected one realtime dispatch per feature-dev step");
     assert.deepEqual(
       spawnCalls.map((call) => call.body.args.agentId),
       [
@@ -101,7 +122,75 @@ test("feature-dev emits realtime dispatches across the whole 7-step pipeline", a
     );
   } finally {
     globalThis.fetch = originalFetch;
+    if (originalDbPath === undefined) delete process.env.ANTFARM_DB_PATH;
+    else process.env.ANTFARM_DB_PATH = originalDbPath;
     process.env.HOME = originalHome;
+    const dbMod = await import("../dist/db.js");
+    dbMod.closeDbForTests?.();
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
+test("feature-dev PR step still claims when tester outputs mixed-case markdown keys", async () => {
+  const originalHome = process.env.HOME;
+  const originalFetch = globalThis.fetch;
+  const originalDbPath = process.env.ANTFARM_DB_PATH;
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "antfarm-feature-dev-home-"));
+  const dbPath = path.join(homeDir, ".openclaw", "antfarm", `feature-dev-${Date.now()}-${Math.random().toString(16).slice(2)}.db`);
+  process.env.HOME = homeDir;
+  process.env.ANTFARM_DB_PATH = dbPath;
+  fs.mkdirSync(path.join(homeDir, ".openclaw"), { recursive: true });
+  fs.writeFileSync(path.join(homeDir, ".openclaw", "openclaw.json"), JSON.stringify({ agents: { list: [] } }, null, 2));
+
+  globalThis.fetch = mock.fn(async (_url: string, init?: any) => {
+    const body = JSON.parse(init.body);
+    if (body.tool === "cron") {
+      if (body.args.action === "list") {
+        return { ok: true, status: 200, json: async () => ({ ok: true, result: [] }) } as any;
+      }
+      if (body.args.action === "add") {
+        return { ok: true, status: 200, json: async () => ({ ok: true, result: { id: `cron-${Date.now()}` } }) } as any;
+      }
+    }
+    if (body.tool === "sessions_spawn") {
+      return { ok: true, status: 200, json: async () => ({ ok: true, result: { sessionId: `sess-${Date.now()}` } }) } as any;
+    }
+    throw new Error(`unexpected tool ${body.tool}`);
+  }) as any;
+
+  try {
+    const { installWorkflow } = await freshImport<typeof import("../dist/installer/install.js")>("../dist/installer/install.js");
+    const { runWorkflow } = await freshImport<typeof import("../dist/installer/run.js")>("../dist/installer/run.js");
+    const { claimStep, completeStep } = await freshImport<typeof import("../dist/installer/step-ops.js")>("../dist/installer/step-ops.js");
+
+    await installWorkflow({ workflowId: "feature-dev" });
+    await runWorkflow({ workflowId: "feature-dev", taskTitle: "Preserve PR handoff" });
+    await tick();
+
+    completeStep(claimStep("feature-dev_planner").stepId!, `STATUS: done\nREPO: /tmp/repo\nBRANCH: feat/realtime\nSTORIES_JSON: [{"id":"story-1","title":"Implement feature","description":"do it","acceptance_criteria":["Tests for feature pass","Typecheck passes"]}]`);
+    await tick();
+    completeStep(claimStep("feature-dev_setup").stepId!, `STATUS: done\nBUILD_CMD: npm run build\nTEST_CMD: npm test\nCI_NOTES: none\nBASELINE: green`);
+    await tick();
+    completeStep(claimStep("feature-dev_developer").stepId!, `STATUS: done\nCHANGES: implemented story\nTESTS: npm test`);
+    await tick();
+    completeStep(claimStep("feature-dev_verifier").stepId!, `STATUS: done\nVERIFIED: story looks good`);
+    await tick();
+
+    const tester = claimStep("feature-dev_tester");
+    assert.equal(tester.found, true);
+    completeStep(tester.stepId!, `**Status:** done\n- **Results:** integration suite passed`);
+    await tick();
+
+    const pr = claimStep("feature-dev_developer");
+    assert.equal(pr.found, true, "PR step should remain claimable when tester uses mixed-case markdown keys");
+    assert.match(pr.resolvedInput ?? "", /RESULTS: integration suite passed/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalDbPath === undefined) delete process.env.ANTFARM_DB_PATH;
+    else process.env.ANTFARM_DB_PATH = originalDbPath;
+    process.env.HOME = originalHome;
+    const dbMod = await import("../dist/db.js");
+    dbMod.closeDbForTests?.();
     fs.rmSync(homeDir, { recursive: true, force: true });
   }
 });
