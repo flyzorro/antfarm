@@ -122,4 +122,24 @@ describe("parseOutputKeyValues — multi-line output parsing", () => {
     assert.equal(result["status"], "done");
     assert.equal(result["note"], "some note");
   });
+
+  it("accepts mixed-case keys so downstream templates still receive the values", () => {
+    const output = "Status: done\nResults: integration suite passed\nPr: https://example.test/pr/1";
+    const result = parseOutputKeyValues(output);
+    assert.equal(result["status"], "done");
+    assert.equal(result["results"], "integration suite passed");
+    assert.equal(result["pr"], "https://example.test/pr/1");
+  });
+
+  it("accepts markdown-emphasized keys commonly emitted by agents", () => {
+    const output = [
+      "**STATUS:** done",
+      "- **RESULTS:** integration suite passed",
+      "__PR__: https://example.test/pr/1",
+    ].join("\n");
+    const result = parseOutputKeyValues(output);
+    assert.equal(result["status"], "done");
+    assert.equal(result["results"], "integration suite passed");
+    assert.equal(result["pr"], "https://example.test/pr/1");
+  });
 });

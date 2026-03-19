@@ -36,12 +36,19 @@ export function parseOutputKeyValues(output: string): Record<string, string> {
   }
 
   for (const line of lines) {
-    const match = line.match(/^([A-Z_]+):\s*(.*)$/);
+    const candidates = [
+      line.match(/^\*\*([A-Za-z_][A-Za-z0-9_]*)\:\*\*\s*(.*)$/),
+      line.match(/^__([A-Za-z_][A-Za-z0-9_]*)__:\s*(.*)$/),
+      line.match(/^\s*[-*+]\s+\*\*([A-Za-z_][A-Za-z0-9_]*)\:\*\*\s*(.*)$/),
+      line.match(/^\s*[-*+]\s+__([A-Za-z_][A-Za-z0-9_]*)__:\s*(.*)$/),
+      line.match(/^([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/),
+    ];
+    const match = candidates.find(Boolean);
     if (match) {
       // New KEY: line found — flush previous key
       commitPending();
-      pendingKey = match[1];
-      pendingValue = match[2];
+      pendingKey = match[1].toUpperCase();
+      pendingValue = match[2] ?? "";
     } else if (pendingKey) {
       // Continuation line — append to current key's value
       pendingValue += "\n" + line;
@@ -75,6 +82,17 @@ function getWorkflowId(runId: string): string | undefined {
     const row = db.prepare("SELECT workflow_id FROM runs WHERE id = ?").get(runId) as { workflow_id: string } | undefined;
     return row?.workflow_id;
   } catch { return undefined; }
+}
+
+function emitStepPendingByRowId(stepRowId: string): void {
+  try {
+    const db = getDb();
+    const row = db.prepare("SELECT run_id, step_id FROM steps WHERE id = ?").get(stepRowId) as { run_id: string; step_id: string } | undefined;
+    if (!row) return;
+    emitEvent({ ts: new Date().toISOString(), event: "step.pending", runId: row.run_id, workflowId: getWorkflowId(row.run_id), stepId: row.step_id });
+  } catch {
+    // best-effort
+  }
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -491,25 +509,50 @@ export function claimStep(agentId: string): ClaimResult {
   }
   const db = getDb();
 
-  const step = db.prepare(
+  const candidates = db.prepare(
     `SELECT s.id, s.step_id, s.run_id, s.input_template, s.type, s.loop_config, s.step_index
      FROM steps s
      JOIN runs r ON r.id = s.run_id
      WHERE s.agent_id = ? AND s.status = 'pending'
        AND r.status NOT IN ('failed', 'cancelled')
-       AND NOT EXISTS (
-         SELECT 1 FROM steps prev
-         WHERE prev.run_id = s.run_id
-           AND prev.step_index < s.step_index
-           AND prev.status NOT IN ('done', 'skipped')
-       )
-    ORDER BY s.step_index ASC, s.step_id ASC
-     LIMIT 1`
-  ).get(agentId) as {
+     ORDER BY s.step_index ASC, s.step_id ASC`
+  ).all(agentId) as Array<{
     id: string; step_id: string; run_id: string; input_template: string; type: string;
     loop_config: string | null;
     step_index: number;
-  } | undefined;
+  }>;
+
+  const step = candidates.find((candidate) => {
+    const blockers = db.prepare(
+      `SELECT id, step_id, status, type, loop_config, current_story_id
+         FROM steps
+        WHERE run_id = ?
+          AND step_index < ?
+          AND status NOT IN ('done', 'skipped')`
+    ).all(candidate.run_id, candidate.step_index) as Array<{
+      id: string;
+      step_id: string;
+      status: string;
+      type: string;
+      loop_config: string | null;
+      current_story_id: string | null;
+    }>;
+
+    if (blockers.length === 0) return true;
+
+    // Special case: verify_each intentionally runs while the loop step remains "running"
+    // for the current story. Allow the verify step to claim in that case.
+    const loopBlocker = blockers.find((b) => b.type === "loop" && b.status === "running" && b.loop_config);
+    if (!loopBlocker) return false;
+
+    try {
+      const lc: LoopConfig = JSON.parse(loopBlocker.loop_config!);
+      const isVerifyEachHandOff = lc.verifyEach && lc.verifyStep === candidate.step_id;
+      return isVerifyEachHandOff && blockers.every((b) => b.id === loopBlocker.id || b.status === "done" || b.status === "skipped");
+    } catch {
+      return false;
+    }
+  });
 
   if (!step) return { found: false };
 
@@ -584,13 +627,22 @@ export function claimStep(agentId: string): ClaimResult {
         return { found: false };
       }
 
-      // Claim the story
-      db.prepare(
-        "UPDATE stories SET status = 'running', updated_at = datetime('now') WHERE id = ?"
+      // Claim the story and loop step atomically enough to survive duplicate dispatch attempts.
+      const storyClaim = db.prepare(
+        "UPDATE stories SET status = 'running', updated_at = datetime('now') WHERE id = ? AND status = 'pending'"
       ).run(nextStory.id);
-      db.prepare(
-        "UPDATE steps SET status = 'running', current_story_id = ?, updated_at = datetime('now') WHERE id = ?"
+      if (storyClaim.changes === 0) {
+        return { found: false };
+      }
+      const stepClaim = db.prepare(
+        "UPDATE steps SET status = 'running', current_story_id = ?, updated_at = datetime('now') WHERE id = ? AND status = 'pending' AND current_story_id IS NULL"
       ).run(nextStory.id, step.id);
+      if (stepClaim.changes === 0) {
+        db.prepare(
+          "UPDATE stories SET status = 'pending', updated_at = datetime('now') WHERE id = ? AND status = 'running'"
+        ).run(nextStory.id);
+        return { found: false };
+      }
 
       const wfId = getWorkflowId(step.run_id);
       emitEvent({ ts: new Date().toISOString(), event: "step.running", runId: step.run_id, workflowId: wfId, stepId: step.step_id, agentId: agentId });
@@ -641,9 +693,12 @@ export function claimStep(agentId: string): ClaimResult {
   }
 
   // Single step: existing logic
-  db.prepare(
+  const stepClaim = db.prepare(
     "UPDATE steps SET status = 'running', updated_at = datetime('now') WHERE id = ? AND status = 'pending'"
   ).run(step.id);
+  if (stepClaim.changes === 0) {
+    return { found: false };
+  }
   emitEvent({ ts: new Date().toISOString(), event: "step.running", runId: step.run_id, workflowId: getWorkflowId(step.run_id), stepId: step.step_id, agentId: agentId });
   logger.info(`Step claimed by ${agentId}`, { runId: step.run_id, stepId: step.step_id });
 
@@ -737,6 +792,7 @@ export function completeStep(stepId: string, output: string): { advanced: boolea
         db.prepare(
           "UPDATE steps SET status = 'pending', updated_at = datetime('now') WHERE id = ?"
         ).run(verifyStep.id);
+        emitStepPendingByRowId(verifyStep.id);
         // Loop step stays 'running'
         db.prepare(
           "UPDATE steps SET status = 'running', updated_at = datetime('now') WHERE id = ?"
@@ -827,6 +883,7 @@ function handleVerifyEachCompletion(
 
     // Set loop step back to pending for retry
     db.prepare("UPDATE steps SET status = 'pending', updated_at = datetime('now') WHERE id = ?").run(loopStepId);
+    emitStepPendingByRowId(loopStepId);
     return { advanced: false, runCompleted: false };
   }
 
@@ -840,6 +897,7 @@ function handleVerifyEachCompletion(
     logger.error(`checkLoopContinuation failed, recovering: ${String(err)}`, { runId: verifyStep.run_id });
     // Ensure loop step is at least pending so cron can retry
     db.prepare("UPDATE steps SET status = 'pending', updated_at = datetime('now') WHERE id = ?").run(loopStepId);
+    emitStepPendingByRowId(loopStepId);
     return { advanced: false, runCompleted: false };
   }
 }
@@ -865,6 +923,7 @@ function checkLoopContinuation(runId: string, loopStepId: string): { advanced: b
     db.prepare(
       "UPDATE steps SET status = 'pending', updated_at = datetime('now') WHERE id = ?"
     ).run(loopStepId);
+    emitStepPendingByRowId(loopStepId);
     return { advanced: false, runCompleted: false };
   }
 
