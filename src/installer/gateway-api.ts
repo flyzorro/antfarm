@@ -61,8 +61,10 @@ async function getGatewayConfig(): Promise<GatewayConfig> {
 
 let cachedBinary: string | null = null;
 
-/** Locate the openclaw binary. Checks PATH, then ~/.npm-global/bin, then npx. */
+/** Locate the openclaw binary. Checks OPENCLAW_BIN, then PATH, then ~/.npm-global/bin, then npx. */
 async function findOpenclawBinary(): Promise<string> {
+  const override = process.env.OPENCLAW_BIN?.trim();
+  if (override) return override;
   if (cachedBinary) return cachedBinary;
 
   // 1. Check PATH via `which`
