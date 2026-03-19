@@ -258,7 +258,7 @@ export async function checkCronToolAvailable(): Promise<{ ok: boolean; error?: s
   }
 }
 
-export async function listCronJobs(): Promise<{ ok: boolean; jobs?: Array<{ id: string; name: string }>; error?: string }> {
+export async function listCronJobs(): Promise<{ ok: boolean; jobs?: Array<{ id: string; name: string; enabled?: boolean }>; error?: string }> {
   // --- Try HTTP first ---
   const httpResult = await listCronJobsHTTP();
   if (httpResult !== null) return httpResult;
@@ -267,7 +267,7 @@ export async function listCronJobs(): Promise<{ ok: boolean; jobs?: Array<{ id: 
   try {
     const stdout = await runCli(["cron", "list", "--json", "--all"]);
     const parsed = JSON.parse(stdout);
-    const jobs: Array<{ id: string; name: string }> = parsed.jobs ?? parsed ?? [];
+    const jobs: Array<{ id: string; name: string; enabled?: boolean }> = parsed.jobs ?? parsed ?? [];
     return { ok: true, jobs };
   } catch (err) {
     return { ok: false, error: `CLI fallback failed: ${err}. ${UPDATE_HINT}` };
@@ -275,7 +275,7 @@ export async function listCronJobs(): Promise<{ ok: boolean; jobs?: Array<{ id: 
 }
 
 /** HTTP-only list. Returns null on 404/network error. */
-async function listCronJobsHTTP(): Promise<{ ok: boolean; jobs?: Array<{ id: string; name: string }>; error?: string } | null> {
+async function listCronJobsHTTP(): Promise<{ ok: boolean; jobs?: Array<{ id: string; name: string; enabled?: boolean }>; error?: string } | null> {
   const gateway = await getGatewayConfig();
   try {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -284,7 +284,7 @@ async function listCronJobsHTTP(): Promise<{ ok: boolean; jobs?: Array<{ id: str
     const response = await fetch(`${gateway.url}/tools/invoke`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ tool: "cron", args: { action: "list" }, sessionKey: "agent:main:main" }),
+      body: JSON.stringify({ tool: "cron", args: { action: "list", includeDisabled: true }, sessionKey: "agent:main:main" }),
     });
 
     if (isTransientGatewayFailure(response.status)) return null;

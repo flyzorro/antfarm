@@ -1,4 +1,4 @@
-import { createAgentCronJob, deleteAgentCronJobs, listCronJobs, checkCronToolAvailable } from "./gateway-api.js";
+import { createAgentCronJob, deleteAgentCronJobs, deleteCronJob, listCronJobs, checkCronToolAvailable } from "./gateway-api.js";
 import type { WorkflowSpec } from "./types.js";
 import { resolveAntfarmCli } from "./paths.js";
 import { getDb } from "../db.js";
@@ -165,12 +165,35 @@ export async function setupAgentCrons(workflow: WorkflowSpec): Promise<void> {
   // Resolve polling model: per-agent > workflow-level > default
   const workflowPollingModel = workflow.polling?.model ?? DEFAULT_POLLING_MODEL;
   const workflowPollingTimeout = workflow.polling?.timeoutSeconds ?? DEFAULT_POLLING_TIMEOUT_SECONDS;
+  const cronPrefix = `antfarm/${workflow.id}/`;
+  const existingResult = await listCronJobs();
+  if (!existingResult.ok || !existingResult.jobs) {
+    throw new Error(`Failed to inspect existing cron jobs before setup: ${existingResult.error ?? "unknown error"}`);
+  }
+  const existingJobs = existingResult.jobs.filter((job) => job.name.startsWith(cronPrefix));
+  const existingByName = new Map<string, Array<{ id: string; name: string }>>();
+
+  for (const job of existingJobs) {
+    const bucket = existingByName.get(job.name) ?? [];
+    bucket.push(job);
+    existingByName.set(job.name, bucket);
+  }
 
   for (let i = 0; i < agents.length; i++) {
     const agent = agents[i];
     const anchorMs = i * 60_000; // stagger by 1 minute each
     const cronName = `antfarm/${workflow.id}/${agent.id}`;
     const agentId = `${workflow.id}_${agent.id}`;
+    const matchingJobs = existingByName.get(cronName) ?? [];
+
+    // Keep at most one existing cron per agent name.
+    // If duplicates already exist from older buggy runs, prune the extras.
+    if (matchingJobs.length > 1) {
+      for (const duplicate of matchingJobs.slice(1)) {
+        await deleteCronJob(duplicate.id);
+      }
+    }
+    if (matchingJobs.length > 0) continue;
 
     // Two-phase: Phase 1 uses cheap polling model + minimal prompt
     const requestedPollingModel = agent.pollingModel ?? workflowPollingModel;
@@ -214,26 +237,41 @@ function countActiveRuns(workflowId: string): number {
 }
 
 /**
- * Check if crons already exist for a workflow.
+ * Inspect current cron jobs for a workflow.
  */
-async function workflowCronsExist(workflowId: string): Promise<boolean> {
+async function getWorkflowCronState(workflow: WorkflowSpec): Promise<{
+  matchingJobs: Array<{ id: string; name: string; enabled?: boolean }>;
+  expectedCount: number;
+  healthy: boolean;
+}> {
   const result = await listCronJobs();
-  if (!result.ok || !result.jobs) return false;
-  const prefix = `antfarm/${workflowId}/`;
-  return result.jobs.some((j) => j.name.startsWith(prefix));
+  if (!result.ok || !result.jobs) {
+    throw new Error(`Failed to inspect cron jobs: ${result.error ?? "unknown error"}`);
+  }
+
+  const prefix = `antfarm/${workflow.id}/`;
+  const matchingJobs = result.jobs.filter((j) => j.name.startsWith(prefix));
+  const enabledJobs = matchingJobs.filter((j) => j.enabled !== false);
+  const healthy = matchingJobs.length === workflow.agents.length && enabledJobs.length === workflow.agents.length;
+  return { matchingJobs, expectedCount: workflow.agents.length, healthy };
 }
 
 /**
  * Start crons for a workflow when a run begins.
- * No-ops if crons already exist (another run of the same workflow is active).
+ * Reuses a healthy existing set; otherwise tears down stale/disabled duplicates and recreates.
  */
 export async function ensureWorkflowCrons(workflow: WorkflowSpec): Promise<void> {
-  if (await workflowCronsExist(workflow.id)) return;
+  const state = await getWorkflowCronState(workflow);
+  if (state.healthy) return;
 
   // Preflight: verify cron tool is accessible before attempting to create jobs
   const preflight = await checkCronToolAvailable();
   if (!preflight.ok) {
     throw new Error(preflight.error!);
+  }
+
+  if (state.matchingJobs.length > 0) {
+    await removeAgentCrons(workflow.id);
   }
 
   await setupAgentCrons(workflow);
