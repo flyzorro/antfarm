@@ -1,4 +1,4 @@
-import { describe, it, mock, beforeEach } from "node:test";
+import { describe, it, mock, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -10,11 +10,17 @@ import path from "node:path";
 
 describe("gateway-api model parameter support", () => {
   let createAgentCronJob: typeof import("../dist/installer/gateway-api.js").createAgentCronJob;
+  let listCronJobs: typeof import("../dist/installer/gateway-api.js").listCronJobs;
 
   beforeEach(async () => {
     // Re-import to get fresh module
-    const mod = await import("../dist/installer/gateway-api.js");
+    const mod = await import(`../dist/installer/gateway-api.js?t=${Date.now()}-${Math.random()}`);
     createAgentCronJob = mod.createAgentCronJob;
+    listCronJobs = mod.listCronJobs;
+  });
+
+  afterEach(() => {
+    mock.restoreAll();
   });
 
   it("accepts payload with model parameter", async () => {
@@ -243,6 +249,47 @@ exit 1
       const cliCalls = await fs.readFile(cliLog, "utf-8");
       assert.match(cliCalls, /--timeout-seconds 120/, "CLI fallback should pass timeout in seconds");
       assert.doesNotMatch(cliCalls, /--timeout 120/, "CLI fallback must not use millisecond timeout flag");
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalBin === undefined) delete process.env.OPENCLAW_BIN;
+      else process.env.OPENCLAW_BIN = originalBin;
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("parses CLI cron list JSON even when plugin logs prefix stdout", async () => {
+    const originalFetch = globalThis.fetch;
+    const originalBin = process.env.OPENCLAW_BIN;
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "antfarm-gateway-list-"));
+    const openclawBin = path.join(tmpDir, "openclaw");
+
+    globalThis.fetch = mock.fn(async () => ({
+      ok: false,
+      status: 404,
+    })) as any;
+
+    await fs.writeFile(
+      openclawBin,
+      `#!/bin/sh
+if [ "$1" = "cron" ] && [ "$2" = "list" ]; then
+  printf '[plugins] feishu_doc: Registered feishu_doc, feishu_app_scopes\n'
+  printf '[plugins] [lcm] Plugin loaded (enabled=true, db=/tmp/lcm.db, threshold=0.75)\n'
+  printf '{"jobs":[{"id":"job-1","name":"antfarm/feature-dev/planner","enabled":true}]}\n'
+  exit 0
+fi
+exit 1
+`,
+      { mode: 0o755 }
+    );
+
+    process.env.OPENCLAW_BIN = openclawBin;
+
+    try {
+      const result = await listCronJobs();
+      assert.equal(result.ok, true);
+      assert.deepEqual(result.jobs, [
+        { id: "job-1", name: "antfarm/feature-dev/planner", enabled: true },
+      ]);
     } finally {
       globalThis.fetch = originalFetch;
       if (originalBin === undefined) delete process.env.OPENCLAW_BIN;

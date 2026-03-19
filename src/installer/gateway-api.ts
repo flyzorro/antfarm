@@ -107,6 +107,36 @@ function runCli(args: string[]): Promise<string> {
   });
 }
 
+function extractJsonFromCliOutput(stdout: string): string {
+  const trimmed = stdout.trim();
+  if (!trimmed) {
+    throw new Error("CLI returned empty output");
+  }
+
+  if (trimmed.startsWith("{")) {
+    return trimmed;
+  }
+
+  if (trimmed.startsWith("[") && !trimmed.startsWith("[plugins]")) {
+    return trimmed;
+  }
+
+  const objectIndex = trimmed.indexOf("\n{");
+  const arrayMatches = [...trimmed.matchAll(/\n\[(?!plugins\])/g)].map((m) => m.index ?? -1);
+  const candidates = [objectIndex, ...arrayMatches].filter((idx) => idx >= 0);
+  const start = candidates.length > 0 ? Math.min(...candidates) + 1 : -1;
+
+  if (start >= 0) {
+    return trimmed.slice(start).trim();
+  }
+
+  throw new Error(`CLI did not return JSON: ${trimmed.slice(0, 200)}`);
+}
+
+function parseCliJson<T>(stdout: string): T {
+  return JSON.parse(extractJsonFromCliOutput(stdout)) as T;
+}
+
 const UPDATE_HINT =
   `This may be fixed by updating OpenClaw: npm update -g openclaw`;
 
@@ -169,7 +199,7 @@ export async function createAgentCronJob(job: {
     const stdout = await runCli(args);
     // Try to parse JSON output for the job id
     try {
-      const parsed = JSON.parse(stdout);
+      const parsed = parseCliJson<{ id?: string; jobId?: string }>(stdout);
       return { ok: true, id: parsed.id ?? parsed.jobId };
     } catch {
       // CLI succeeded but output wasn't JSON — still ok
@@ -266,8 +296,8 @@ export async function listCronJobs(): Promise<{ ok: boolean; jobs?: Array<{ id: 
   // --- CLI fallback ---
   try {
     const stdout = await runCli(["cron", "list", "--json", "--all"]);
-    const parsed = JSON.parse(stdout);
-    const jobs: Array<{ id: string; name: string; enabled?: boolean }> = parsed.jobs ?? parsed ?? [];
+    const parsed = parseCliJson<{ jobs?: Array<{ id: string; name: string; enabled?: boolean }> } | Array<{ id: string; name: string; enabled?: boolean }>>(stdout);
+    const jobs: Array<{ id: string; name: string; enabled?: boolean }> = Array.isArray(parsed) ? parsed : (parsed.jobs ?? []);
     return { ok: true, jobs };
   } catch (err) {
     return { ok: false, error: `CLI fallback failed: ${err}. ${UPDATE_HINT}` };

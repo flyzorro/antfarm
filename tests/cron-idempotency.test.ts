@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, it, mock } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 const fakeWorkflow = {
   id: "feature-dev",
@@ -73,6 +76,9 @@ describe("cron setup stays bounded", () => {
 
   it("ensureWorkflowCrons fails closed when cron listing is unavailable", async () => {
     const added: string[] = [];
+    const originalBin = process.env.OPENCLAW_BIN;
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "antfarm-cron-list-fail-"));
+    const openclawBin = path.join(tmpDir, "openclaw");
 
     globalThis.fetch = mock.fn(async (_url: any, opts: any) => {
       const body = JSON.parse(opts.body);
@@ -90,12 +96,32 @@ describe("cron setup stays bounded", () => {
       throw new Error(`Unexpected action ${body.args?.action}`);
     }) as any;
 
-    const { ensureWorkflowCrons } = await import("../dist/installer/agent-cron.js");
-
-    await assert.rejects(
-      ensureWorkflowCrons(fakeWorkflow as any),
-      /Failed to inspect cron jobs:/
+    await fs.writeFile(
+      openclawBin,
+      `#!/bin/sh
+if [ "$1" = "cron" ] && [ "$2" = "list" ]; then
+  echo '[plugins] broken preamble'
+  echo 'not-json'
+  exit 0
+fi
+exit 1
+`,
+      { mode: 0o755 }
     );
-    assert.deepEqual(added, [], "must not create new cron jobs when existing cron state cannot be verified");
+    process.env.OPENCLAW_BIN = openclawBin;
+
+    try {
+      const { ensureWorkflowCrons } = await import(`../dist/installer/agent-cron.js?t=${Date.now()}-${Math.random()}`);
+
+      await assert.rejects(
+        ensureWorkflowCrons(fakeWorkflow as any),
+        /Failed to inspect cron jobs:/
+      );
+      assert.deepEqual(added, [], "must not create new cron jobs when existing cron state cannot be verified");
+    } finally {
+      if (originalBin === undefined) delete process.env.OPENCLAW_BIN;
+      else process.env.OPENCLAW_BIN = originalBin;
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
   });
 });
