@@ -454,6 +454,58 @@ function failStepWithMissingInputs(
   scheduleRunCronTeardown(runId);
 }
 
+function outputSatisfiesExpectations(
+  expects: string,
+  parsedOutput: Record<string, string>,
+  rawOutput: string,
+): boolean {
+  const trimmed = expects.trim();
+  if (!trimmed) return true;
+
+  const expectedPairs = parseOutputKeyValues(trimmed);
+  if (Object.keys(expectedPairs).length > 0) {
+    return Object.entries(expectedPairs).every(([key, expectedValue]) => {
+      const actual = parsedOutput[key]?.trim().toLowerCase();
+      return actual === expectedValue.trim().toLowerCase();
+    });
+  }
+
+  return rawOutput.includes(trimmed);
+}
+
+function failClosedCompletion(
+  stepDbId: string,
+  stepPublicId: string,
+  runId: string,
+  message: string,
+): { advanced: boolean; runCompleted: boolean } {
+  const db = getDb();
+  const wfId = getWorkflowId(runId);
+
+  db.prepare(
+    "UPDATE steps SET status = 'failed', output = ?, updated_at = datetime('now') WHERE id = ?"
+  ).run(message, stepDbId);
+  db.prepare("UPDATE runs SET status = 'failed', updated_at = datetime('now') WHERE id = ?").run(runId);
+
+  emitEvent({
+    ts: new Date().toISOString(),
+    event: "step.failed",
+    runId,
+    workflowId: wfId,
+    stepId: stepPublicId,
+    detail: message,
+  });
+  emitEvent({
+    ts: new Date().toISOString(),
+    event: "run.failed",
+    runId,
+    workflowId: wfId,
+    detail: message,
+  });
+  scheduleRunCronTeardown(runId);
+  return { advanced: false, runCompleted: false };
+}
+
 function runHasStories(runId: string): boolean {
   const db = getDb();
   const total = db.prepare(
@@ -735,8 +787,8 @@ export function completeStep(stepId: string, output: string): { advanced: boolea
   const db = getDb();
 
   const step = db.prepare(
-    "SELECT id, run_id, step_id, step_index, type, loop_config, current_story_id FROM steps WHERE id = ?"
-  ).get(stepId) as { id: string; run_id: string; step_id: string; step_index: number; type: string; loop_config: string | null; current_story_id: string | null } | undefined;
+    "SELECT id, run_id, step_id, step_index, type, loop_config, current_story_id, expects FROM steps WHERE id = ?"
+  ).get(stepId) as { id: string; run_id: string; step_id: string; step_index: number; type: string; loop_config: string | null; current_story_id: string | null; expects: string } | undefined;
 
   if (!step) throw new Error(`Step not found: ${stepId}`);
 
@@ -759,6 +811,8 @@ export function completeStep(stepId: string, output: string): { advanced: boolea
   db.prepare(
     "UPDATE runs SET context = ?, updated_at = datetime('now') WHERE id = ?"
   ).run(JSON.stringify(context), step.run_id);
+
+  const expectationsMet = outputSatisfiesExpectations(step.expects, parsed, output);
 
   // T5: Parse STORIES_JSON from output (any step, typically the planner)
   parseAndInsertStories(output, step.run_id);
@@ -817,6 +871,15 @@ export function completeStep(stepId: string, output: string): { advanced: boolea
     if (lc.verifyEach && lc.verifyStep === step.step_id) {
       return handleVerifyEachCompletion(step, loopStepRow.id, output, context);
     }
+  }
+
+  if (!expectationsMet) {
+    const status = parsed["status"]?.trim();
+    const detail = parsed["failures"] ?? parsed["issues"] ?? parsed["error"] ?? output.trim();
+    const message = status
+      ? `Step reported STATUS: ${status}; expected ${step.expects}. ${detail}`
+      : `Step output did not satisfy expects ${step.expects}. ${detail}`;
+    return failClosedCompletion(step.id, step.step_id, step.run_id, message);
   }
 
   // Single step: mark done and advance
