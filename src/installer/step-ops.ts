@@ -77,6 +77,17 @@ function getWorkflowId(runId: string): string | undefined {
   } catch { return undefined; }
 }
 
+function emitStepPendingByRowId(stepRowId: string): void {
+  try {
+    const db = getDb();
+    const row = db.prepare("SELECT run_id, step_id FROM steps WHERE id = ?").get(stepRowId) as { run_id: string; step_id: string } | undefined;
+    if (!row) return;
+    emitEvent({ ts: new Date().toISOString(), event: "step.pending", runId: row.run_id, workflowId: getWorkflowId(row.run_id), stepId: row.step_id });
+  } catch {
+    // best-effort
+  }
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────
 
 /**
@@ -502,6 +513,11 @@ export function claimStep(agentId: string): ClaimResult {
          WHERE prev.run_id = s.run_id
            AND prev.step_index < s.step_index
            AND prev.status NOT IN ('done', 'skipped')
+           AND NOT (
+             prev.type = 'loop'
+             AND prev.status = 'running'
+             AND json_extract(prev.loop_config, '$.verifyStep') = s.step_id
+           )
        )
     ORDER BY s.step_index ASC, s.step_id ASC
      LIMIT 1`
@@ -584,13 +600,22 @@ export function claimStep(agentId: string): ClaimResult {
         return { found: false };
       }
 
-      // Claim the story
-      db.prepare(
-        "UPDATE stories SET status = 'running', updated_at = datetime('now') WHERE id = ?"
+      // Claim the story and loop step atomically enough to survive duplicate dispatch attempts.
+      const storyClaim = db.prepare(
+        "UPDATE stories SET status = 'running', updated_at = datetime('now') WHERE id = ? AND status = 'pending'"
       ).run(nextStory.id);
-      db.prepare(
-        "UPDATE steps SET status = 'running', current_story_id = ?, updated_at = datetime('now') WHERE id = ?"
+      if (storyClaim.changes === 0) {
+        return { found: false };
+      }
+      const stepClaim = db.prepare(
+        "UPDATE steps SET status = 'running', current_story_id = ?, updated_at = datetime('now') WHERE id = ? AND status = 'pending' AND current_story_id IS NULL"
       ).run(nextStory.id, step.id);
+      if (stepClaim.changes === 0) {
+        db.prepare(
+          "UPDATE stories SET status = 'pending', updated_at = datetime('now') WHERE id = ? AND status = 'running'"
+        ).run(nextStory.id);
+        return { found: false };
+      }
 
       const wfId = getWorkflowId(step.run_id);
       emitEvent({ ts: new Date().toISOString(), event: "step.running", runId: step.run_id, workflowId: wfId, stepId: step.step_id, agentId: agentId });
@@ -641,9 +666,12 @@ export function claimStep(agentId: string): ClaimResult {
   }
 
   // Single step: existing logic
-  db.prepare(
+  const stepClaim = db.prepare(
     "UPDATE steps SET status = 'running', updated_at = datetime('now') WHERE id = ? AND status = 'pending'"
   ).run(step.id);
+  if (stepClaim.changes === 0) {
+    return { found: false };
+  }
   emitEvent({ ts: new Date().toISOString(), event: "step.running", runId: step.run_id, workflowId: getWorkflowId(step.run_id), stepId: step.step_id, agentId: agentId });
   logger.info(`Step claimed by ${agentId}`, { runId: step.run_id, stepId: step.step_id });
 
@@ -737,6 +765,7 @@ export function completeStep(stepId: string, output: string): { advanced: boolea
         db.prepare(
           "UPDATE steps SET status = 'pending', updated_at = datetime('now') WHERE id = ?"
         ).run(verifyStep.id);
+        emitStepPendingByRowId(verifyStep.id);
         // Loop step stays 'running'
         db.prepare(
           "UPDATE steps SET status = 'running', updated_at = datetime('now') WHERE id = ?"
@@ -827,6 +856,7 @@ function handleVerifyEachCompletion(
 
     // Set loop step back to pending for retry
     db.prepare("UPDATE steps SET status = 'pending', updated_at = datetime('now') WHERE id = ?").run(loopStepId);
+    emitStepPendingByRowId(loopStepId);
     return { advanced: false, runCompleted: false };
   }
 
@@ -840,6 +870,7 @@ function handleVerifyEachCompletion(
     logger.error(`checkLoopContinuation failed, recovering: ${String(err)}`, { runId: verifyStep.run_id });
     // Ensure loop step is at least pending so cron can retry
     db.prepare("UPDATE steps SET status = 'pending', updated_at = datetime('now') WHERE id = ?").run(loopStepId);
+    emitStepPendingByRowId(loopStepId);
     return { advanced: false, runCompleted: false };
   }
 }
@@ -865,6 +896,7 @@ function checkLoopContinuation(runId: string, loopStepId: string): { advanced: b
     db.prepare(
       "UPDATE steps SET status = 'pending', updated_at = datetime('now') WHERE id = ?"
     ).run(loopStepId);
+    emitStepPendingByRowId(loopStepId);
     return { advanced: false, runCompleted: false };
   }
 

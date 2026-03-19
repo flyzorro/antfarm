@@ -64,6 +64,9 @@ export async function runWorkflow(params: {
   }
 
   emitEvent({ ts: new Date().toISOString(), event: "run.started", runId, workflowId: workflow.id });
+  if (workflow.steps[0]) {
+    emitEvent({ ts: new Date().toISOString(), event: "step.pending", runId, workflowId: workflow.id, stepId: workflow.steps[0].id });
+  }
 
   logger.info(`Run started: "${params.taskTitle}"`, {
     workflowId: workflow.id,
