@@ -1,5 +1,8 @@
 import { describe, it, mock, beforeEach } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 // We test the exported createAgentCronJob function's type interface
 // by importing and verifying it accepts model in payload and delivery field.
@@ -190,6 +193,61 @@ describe("gateway-api model parameter support", () => {
       assert.equal(body.args.job.payload.model, "claude-sonnet-4-20250514");
     } finally {
       globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("uses --timeout-seconds for CLI fallback cron creation", async () => {
+    const originalFetch = globalThis.fetch;
+    const originalBin = process.env.OPENCLAW_BIN;
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "antfarm-gateway-api-"));
+    const cliLog = path.join(tmpDir, "openclaw-cli.log");
+    const openclawBin = path.join(tmpDir, "openclaw");
+
+    globalThis.fetch = mock.fn(async () => ({
+      ok: false,
+      status: 404,
+    })) as any;
+
+    await fs.writeFile(
+      openclawBin,
+      `#!/bin/sh
+printf '%s\n' "$*" >> ${JSON.stringify(cliLog)}
+if [ "$1" = "cron" ] && [ "$2" = "add" ]; then
+  printf '{"id":"cli-job"}\n'
+  exit 0
+fi
+exit 1
+`,
+      { mode: 0o755 }
+    );
+
+    process.env.OPENCLAW_BIN = openclawBin;
+
+    try {
+      const result = await createAgentCronJob({
+        name: "test/agent",
+        schedule: { kind: "every", everyMs: 300_000 },
+        sessionTarget: "isolated",
+        agentId: "test-agent",
+        payload: {
+          kind: "agentTurn",
+          message: "poll",
+          timeoutSeconds: 120,
+        },
+        enabled: true,
+      });
+
+      assert.equal(result.ok, true);
+      assert.equal(result.id, "cli-job");
+
+      const cliCalls = await fs.readFile(cliLog, "utf-8");
+      assert.match(cliCalls, /--timeout-seconds 120/, "CLI fallback should pass timeout in seconds");
+      assert.doesNotMatch(cliCalls, /--timeout 120/, "CLI fallback must not use millisecond timeout flag");
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalBin === undefined) delete process.env.OPENCLAW_BIN;
+      else process.env.OPENCLAW_BIN = originalBin;
+      await fs.rm(tmpDir, { recursive: true, force: true });
     }
   });
 });
