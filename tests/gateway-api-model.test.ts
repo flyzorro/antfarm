@@ -248,7 +248,74 @@ exit 1
 
       const cliCalls = await fs.readFile(cliLog, "utf-8");
       assert.match(cliCalls, /--timeout-seconds 120/, "CLI fallback should pass timeout in seconds");
-      assert.doesNotMatch(cliCalls, /--timeout 120/, "CLI fallback must not use millisecond timeout flag");
+      assert.match(cliCalls, /--timeout 30000/, "CLI fallback should set an explicit gateway request timeout");
+      assert.doesNotMatch(cliCalls, /--timeout 120(\D|$)/, "CLI fallback must not confuse agent timeout seconds with millisecond request timeout");
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalBin === undefined) delete process.env.OPENCLAW_BIN;
+      else process.env.OPENCLAW_BIN = originalBin;
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("retries CLI fallback cron creation on transient gateway timeout", async () => {
+    const originalFetch = globalThis.fetch;
+    const originalBin = process.env.OPENCLAW_BIN;
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "antfarm-gateway-retry-"));
+    const cliLog = path.join(tmpDir, "openclaw-cli.log");
+    const stateFile = path.join(tmpDir, "attempt.txt");
+    const openclawBin = path.join(tmpDir, "openclaw");
+
+    globalThis.fetch = mock.fn(async () => ({
+      ok: false,
+      status: 404,
+    })) as any;
+
+    await fs.writeFile(
+      openclawBin,
+      `#!/bin/sh
+count=0
+if [ -f ${JSON.stringify(stateFile)} ]; then
+  count=$(cat ${JSON.stringify(stateFile)})
+fi
+count=$((count + 1))
+printf '%s\n' "$*" >> ${JSON.stringify(cliLog)}
+printf '%s' "$count" > ${JSON.stringify(stateFile)}
+if [ "$1" = "cron" ] && [ "$2" = "add" ]; then
+  if [ "$count" -eq 1 ]; then
+    echo 'Error: gateway timeout after 120ms' >&2
+    exit 1
+  fi
+  printf '{"id":"cli-job-retry"}\n'
+  exit 0
+fi
+exit 1
+`,
+      { mode: 0o755 }
+    );
+
+    process.env.OPENCLAW_BIN = openclawBin;
+
+    try {
+      const result = await createAgentCronJob({
+        name: "test/retry-agent",
+        schedule: { kind: "every", everyMs: 300_000 },
+        sessionTarget: "isolated",
+        agentId: "test-agent",
+        payload: {
+          kind: "agentTurn",
+          message: "poll",
+          timeoutSeconds: 120,
+        },
+        enabled: true,
+      });
+
+      assert.equal(result.ok, true);
+      assert.equal(result.id, "cli-job-retry");
+
+      const cliCalls = await fs.readFile(cliLog, "utf-8");
+      const attempts = cliCalls.trim().split(/\n/).filter(Boolean);
+      assert.equal(attempts.length, 2, "CLI fallback should retry once after transient gateway timeout");
     } finally {
       globalThis.fetch = originalFetch;
       if (originalBin === undefined) delete process.env.OPENCLAW_BIN;
