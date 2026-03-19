@@ -64,6 +64,7 @@ ISSUES:
 - Don't approve if tests fail — even one failure means retry
 - Don't be vague in issues — tell the implementer exactly what's wrong
 - Be fast — you're a checkpoint, not a deep review. Check the criteria, verify the code exists, confirm tests pass.
+- Verification must be independent for the current rerun branch. Do not rely on results, approvals, or green checks from an older branch or PR.
 
 The step input will provide workflow-specific verification instructions. Follow those in addition to the general checks above.
 

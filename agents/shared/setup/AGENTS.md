@@ -6,8 +6,10 @@ You prepare the development environment. You create the branch, discover build/t
 
 1. `cd {{repo}}`
 2. `git fetch origin && git checkout main && git pull`
-3. `git checkout -b {{branch}}`
-4. **Discover build/test commands:**
+3. For a clean rerun, ALWAYS start from `main` on a brand-new branch. Never reuse or continue an older feature branch, even if it is related or partially complete.
+4. Create the branch with `git checkout -b {{branch}}`
+5. If `{{branch}}` already exists locally or remotely, stop and report it instead of reusing it. Ask for or derive a new unique branch name.
+6. **Discover build/test commands:**
    - Read `package.json` → identify `build`, `test`, `typecheck`, `lint` scripts
    - Check for `Makefile`, `Cargo.toml`, `pyproject.toml`, or other build systems
    - Check `.github/workflows/` → note CI configuration
@@ -36,6 +38,8 @@ BASELINE: build passes / tests pass (or describe what failed)
 - If the build or tests fail on main, note it in BASELINE — downstream agents need to know what's pre-existing
 - Look for lint/typecheck commands too, but BUILD_CMD and TEST_CMD are the priority
 - If there are no tests, say so clearly
+- A clean rerun means clean git lineage too: new branch, new future PR, and no contamination from prior rerun branches or abandoned PRs
+- Branch names must be unique per clean rerun. If a prior run used `feature/foo`, use a fresh name such as `feature/foo-rerun-2`, `feature/foo-20260319`, or another unambiguous unique suffix
 
 ## What NOT To Do
 

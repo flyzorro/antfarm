@@ -308,6 +308,36 @@ Antfarm includes shared agents in `agents/shared/` that you can reuse:
 - **verifier** — Verifies work against acceptance criteria
 - **pr** — Creates pull requests via `gh`
 
+### Clean Reruns: Branch and PR Isolation
+
+If you are designing a workflow that may be re-run cleanly after an earlier attempt, encode that policy explicitly in your setup and PR prompts:
+
+- A clean rerun must start from `main` (or your base branch) on a **brand-new branch**
+- The rerun branch must be **unique**; if the proposed name already exists locally or remotely, stop and choose a new one
+- A clean rerun must open a **new PR**
+- Do **not** reuse, reopen, or append work onto an older branch or older PR from a previous run
+- Keep verification independent: verifiers/testers should validate only the current rerun branch, not assume older branch state is acceptable
+
+Recommended wording for setup steps:
+
+```yaml
+Instructions:
+  1. This run must start clean from main
+  2. Create a brand-new branch for this run only (git checkout -b {{branch}})
+  3. Never reuse or continue an older branch or PR, even if it is related
+  4. If {{branch}} already exists locally or remotely, stop and report that a new unique branch name is required
+```
+
+Recommended wording for PR steps:
+
+```yaml
+Requirements:
+  - Open a NEW PR from {{branch}}
+  - {{branch}} must be a new unique branch for this run
+  - Do not reuse, update, or reopen an older PR from a previous run
+  - Do not attach this rerun to an older branch with pre-existing PR history
+```
+
 Reference them from your workflow:
 
 ```yaml

@@ -179,10 +179,12 @@ steps:
 
       Instructions:
       1. cd into the repo
-      2. Create the security branch (git checkout -b {{branch}} from main)
-      3. Read package.json, CI config, test config to understand build/test setup
-      4. Run the build to establish a baseline
-      5. Run the tests to establish a baseline
+      2. This run must start clean from main. Create a brand-new security branch for this run only (git checkout -b {{branch}} from main)
+      3. Never reuse or continue an older security-audit branch or an older PR, even if it covered the same findings
+      4. If {{branch}} already exists locally or remotely, stop and report that a new unique branch name is required
+      5. Read package.json, CI config, test config to understand build/test setup
+      6. Run the build to establish a baseline
+      7. Run the tests to establish a baseline
 
       Reply with:
       STATUS: done
@@ -383,6 +385,12 @@ steps:
       **Before**: <from findings>
       **After**: {{audit_after}}
       ```
+
+      Clean-rerun requirements:
+      - Open a NEW PR from {{branch}}
+      - {{branch}} must be a new unique branch for this run
+      - Do not reuse, update, or reopen an older PR from a previous run
+      - Do not attach this rerun to an older branch with pre-existing PR history
 
       Label: security
 
