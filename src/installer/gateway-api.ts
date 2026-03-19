@@ -95,16 +95,48 @@ async function findOpenclawBinary(): Promise<string> {
   return "npx";
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableCliFallbackError(message: string): boolean {
+  const text = message.toLowerCase();
+  return text.includes("gateway timeout")
+    || text.includes("timed out")
+    || text.includes("econnreset")
+    || text.includes("socket hang up")
+    || text.includes("fetch failed")
+    || text.includes("network error")
+    || text.includes("database is locked");
+}
+
 /** Run an openclaw CLI command and return stdout. */
-function runCli(args: string[]): Promise<string> {
-  return new Promise(async (resolve, reject) => {
-    const bin = await findOpenclawBinary();
-    const finalArgs = bin === "npx" ? ["openclaw", ...args] : args;
-    execFile(bin, finalArgs, { timeout: 30_000 }, (err, stdout, stderr) => {
-      if (err) reject(new Error(stderr || err.message));
-      else resolve(stdout);
-    });
-  });
+async function runCli(args: string[], options?: { retries?: number; retryDelayMs?: number }): Promise<string> {
+  const retries = options?.retries ?? 0;
+  const retryDelayMs = options?.retryDelayMs ?? 750;
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const stdout = await new Promise<string>(async (resolve, reject) => {
+        const bin = await findOpenclawBinary();
+        const finalArgs = bin === "npx" ? ["openclaw", ...args] : args;
+        execFile(bin, finalArgs, { timeout: 30_000 }, (err, stdout, stderr) => {
+          if (err) reject(new Error(stderr || err.message));
+          else resolve(stdout);
+        });
+      });
+      return stdout;
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      if (attempt >= retries || !isRetryableCliFallbackError(lastError.message)) {
+        throw lastError;
+      }
+      await sleep(retryDelayMs * (attempt + 1));
+    }
+  }
+
+  throw lastError ?? new Error("Unknown CLI failure");
 }
 
 function extractJsonFromCliOutput(stdout: string): string {
@@ -164,7 +196,7 @@ export async function createAgentCronJob(job: {
 
   // --- Fallback to CLI ---
   try {
-    const args = ["cron", "add", "--json", "--name", job.name];
+    const args = ["cron", "add", "--json", "--timeout", "30000", "--name", job.name];
 
     if (job.schedule.kind === "every" && job.schedule.everyMs) {
       args.push("--every", `${job.schedule.everyMs}ms`);
@@ -196,7 +228,7 @@ export async function createAgentCronJob(job: {
       args.push("--disabled");
     }
 
-    const stdout = await runCli(args);
+    const stdout = await runCli(args, { retries: 2, retryDelayMs: 1000 });
     // Try to parse JSON output for the job id
     try {
       const parsed = parseCliJson<{ id?: string; jobId?: string }>(stdout);
@@ -278,7 +310,7 @@ export async function checkCronToolAvailable(): Promise<{ ok: boolean; error?: s
 
   // Try CLI fallback
   try {
-    await runCli(["cron", "list", "--json"]);
+    await runCli(["cron", "list", "--json", "--timeout", "30000"], { retries: 2, retryDelayMs: 1000 });
     return { ok: true };
   } catch {
     return {
@@ -295,7 +327,7 @@ export async function listCronJobs(): Promise<{ ok: boolean; jobs?: Array<{ id: 
 
   // --- CLI fallback ---
   try {
-    const stdout = await runCli(["cron", "list", "--json", "--all"]);
+    const stdout = await runCli(["cron", "list", "--json", "--all", "--timeout", "30000"], { retries: 2, retryDelayMs: 1000 });
     const parsed = parseCliJson<{ jobs?: Array<{ id: string; name: string; enabled?: boolean }> } | Array<{ id: string; name: string; enabled?: boolean }>>(stdout);
     const jobs: Array<{ id: string; name: string; enabled?: boolean }> = Array.isArray(parsed) ? parsed : (parsed.jobs ?? []);
     return { ok: true, jobs };
@@ -352,7 +384,7 @@ export async function deleteCronJob(jobId: string): Promise<{ ok: boolean; error
 
   // --- CLI fallback ---
   try {
-    await runCli(["cron", "rm", jobId, "--json"]);
+    await runCli(["cron", "rm", jobId, "--json", "--timeout", "30000"], { retries: 2, retryDelayMs: 1000 });
     return { ok: true };
   } catch (err) {
     return { ok: false, error: `CLI fallback failed: ${err}. ${UPDATE_HINT}` };
