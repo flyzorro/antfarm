@@ -1,0 +1,19 @@
+# Progress Log
+Run: 0e4d4a05-055b-499f-a90d-0315b072d332
+Task: Fresh rerun after DB reset. Strict scope: exactly one story only, US-001 only, backend-only only. Implement backend company directory persistence and retrieval contract.
+Started: 2026-03-20T13:49:00+08:00
+
+## Codebase Patterns
+- Antfarm adds persistent SQLite schema through the centralized migration function in `src/db.ts`; backend persistence changes should follow that path.
+- Antfarm backend smoke/integration tests point at built `dist/` modules and isolate SQLite state by setting `ANTFARM_DB_PATH` to a temp database.
+- Small backend operator surfaces are exposed through `src/cli/cli.ts` in addition to exported TypeScript functions when a mechanically callable path is needed.
+
+---
+
+## 2026-03-20 14:00 GMT+8 - US-001: Add backend company directory persistence and retrieval contract
+- Implemented a new `companies` SQLite table in the existing migration flow and added backend create/list functions in `src/company-directory.ts`.
+- Added mechanically callable CLI paths with `antfarm company create <name>` and `antfarm company list [--json]`, and re-exported the backend module from `src/index.ts`.
+- Added focused `node:test` coverage for fresh-db migration, persistence/list retrieval, and CLI create/list behavior.
+- Files changed: `package.json`, `src/cli/cli.ts`, `src/db.ts`, `src/index.ts`, `src/company-directory.ts`, `tests/company-directory.test.ts`.
+- **Learnings:** this repo’s backend persistence contract is best kept tiny and direct; using `ANTFARM_DB_PATH` makes fresh-reset DB tests straightforward and deterministic.
+---

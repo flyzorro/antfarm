@@ -27,6 +27,7 @@ import { claimStep, completeStep, failStep, getStories, peekStep } from "../inst
 import { ensureCliSymlink } from "../installer/symlink.js";
 import { runMedicCheck, getMedicStatus, getRecentMedicChecks } from "../medic/medic.js";
 import { installMedicCron, uninstallMedicCron, isMedicCronInstalled } from "../medic/medic-cron.js";
+import { createCompany, listCompanies } from "../company-directory.js";
 import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -109,6 +110,9 @@ function printUsage() {
       "antfarm step complete <step-id>      Complete step (reads output from stdin)",
       "antfarm step fail <step-id> <error>  Fail step with retry logic",
       "antfarm step stories <run-id>       List stories for a run",
+      "",
+      "antfarm company create <name>        Create a company directory record",
+      "antfarm company list [--json]        List company directory records",
       "",
       "antfarm medic install                Install medic watchdog cron",
       "antfarm medic uninstall              Remove medic cron",
@@ -269,6 +273,38 @@ async function main() {
     console.log(`Dashboard started (PID ${result.pid})`);
     console.log(`  http://localhost:${result.port}`);
     return;
+  }
+
+  if (group === "company") {
+    if (action === "create") {
+      const name = args.slice(2).join(" ").trim();
+      if (!name) {
+        process.stderr.write("Missing company name.\n");
+        process.exit(1);
+      }
+      const company = createCompany(name);
+      console.log(JSON.stringify(company));
+      return;
+    }
+
+    if (action === "list") {
+      const companies = listCompanies();
+      if (args.includes("--json")) {
+        console.log(JSON.stringify(companies));
+        return;
+      }
+      if (companies.length === 0) {
+        console.log("No companies found.");
+        return;
+      }
+      for (const company of companies) {
+        console.log(`${company.id}  ${company.name}`);
+      }
+      return;
+    }
+
+    printUsage();
+    process.exit(1);
   }
 
   if (group === "medic") {
