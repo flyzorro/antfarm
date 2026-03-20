@@ -47,6 +47,13 @@ describe("buildPollingPrompt", () => {
     assert.ok(prompt.includes("---END WORK PROMPT---"), "should delimit work prompt");
   });
 
+  it("warns agents to preserve exact step-specific output keys like PR for downstream handoff", () => {
+    const prompt = buildPollingPrompt("feature-dev", "developer");
+    assert.ok(prompt.includes("Reply with:"), "should tell agents where to find the exact output contract");
+    assert.ok(prompt.includes("Do NOT silently replace required fields like PR, RESULTS, VERIFIED, or DECISION"));
+    assert.ok(prompt.includes("<OTHER REQUIRED FIELDS FROM THE CLAIMED STEP>"), "completion example should stay schema-neutral");
+  });
+
   it("specifies the full model for the spawned task", () => {
     const prompt = buildPollingPrompt("feature-dev", "developer", "claude-opus-4-6");
     assert.ok(prompt.includes('"claude-opus-4-6"'), "should specify model for spawn");
