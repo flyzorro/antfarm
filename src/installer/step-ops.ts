@@ -281,8 +281,10 @@ function parseAndInsertStories(output: string, runId: string): void {
 
 // ── Abandoned Step Cleanup ──────────────────────────────────────────
 
-const ABANDONED_THRESHOLD_MS = (getMaxRoleTimeoutSeconds() + 5 * 60) * 1000; // max role timeout + 5 min buffer
-const MAX_ABANDON_RESETS = 5; // abandoned steps get more chances than explicit failures
+// Reduced threshold: 5 minutes (was max role timeout + 5 min buffer = ~35 min)
+// This catches aborted agents that never report completion/failure
+const ABANDONED_THRESHOLD_MS = 5 * 60 * 1000; 
+const MAX_ABANDON_RESETS = 3; // fewer retries for abandoned steps - abort usually means fatal
 
 /**
  * Find steps that have been "running" for too long and reset them to pending.
