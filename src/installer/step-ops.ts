@@ -281,8 +281,76 @@ function parseAndInsertStories(output: string, runId: string): void {
 
 // ── Abandoned Step Cleanup ──────────────────────────────────────────
 
-const ABANDONED_THRESHOLD_MS = (getMaxRoleTimeoutSeconds() + 5 * 60) * 1000; // max role timeout + 5 min buffer
-const MAX_ABANDON_RESETS = 5; // abandoned steps get more chances than explicit failures
+// Threshold: 15 minutes for regular steps, but checkSessionAbortEvents() provides real-time abort detection
+// The timeout is a fallback for when we can't detect aborts via session files
+const ABANDONED_THRESHOLD_MS = 15 * 60 * 1000; 
+const MAX_ABANDON_RESETS = 3; // fewer retries for abandoned steps - abort usually means fatal
+
+/**
+ * Check running steps by inspecting their agent session files for abort events.
+ * This provides real-time detection of agent crashes/aborts without waiting for timeout.
+ * Looks for openclaw:prompt_error events with "aborted" in the session JSONL files.
+ */
+export function checkSessionAbortEvents(): void {
+  const db = getDb();
+  const agentsDir = path.join(os.homedir(), ".openclaw", "agents");
+
+  // Find all running steps
+  const runningSteps = db.prepare(
+    "SELECT id, step_id, run_id, agent_id FROM steps WHERE status = 'running'"
+  ).all() as { id: string; step_id: string; run_id: string; agent_id: string }[];
+
+  for (const step of runningSteps) {
+    // Try to find session files for this agent
+    // Session files are in ~/.openclaw/agents/{agent_id}/sessions/
+    const agentDir = path.join(agentsDir, step.agent_id, "sessions");
+    if (!fs.existsSync(agentDir)) continue;
+
+    // Find recent session files (last 5)
+    const sessionFiles = fs.readdirSync(agentDir)
+      .filter(f => f.endsWith(".jsonl"))
+      .sort((a, b) => b.localeCompare(a))
+      .slice(0, 5);
+
+    for (const sessionFile of sessionFiles) {
+      const sessionPath = path.join(agentDir, sessionFile);
+      try {
+        const content = fs.readFileSync(sessionPath, "utf-8");
+        // Check for abort/error events
+        if (content.includes('"error":"aborted"') || 
+            content.includes('"error":"cancelled"') ||
+            content.includes('"customType":"openclaw:prompt-error"')) {
+          // Found an aborted session - mark step as failed/pending
+          const wfId = getWorkflowId(step.run_id);
+          const newAbandonCount = 1;
+          
+          if (newAbandonCount >= MAX_ABANDON_RESETS) {
+            // Too many abandons - fail the step and run
+            db.prepare(
+              "UPDATE steps SET status = 'failed', output = 'Agent session aborted without completing', abandoned_count = ?, updated_at = datetime('now') WHERE id = ?"
+            ).run(newAbandonCount, step.id);
+            db.prepare(
+              "UPDATE runs SET status = 'failed', updated_at = datetime('now') WHERE id = ?"
+            ).run(step.run_id);
+            emitEvent({ ts: new Date().toISOString(), event: "step.failed", runId: step.run_id, workflowId: wfId, stepId: step.step_id, detail: "Agent session aborted" });
+            emitEvent({ ts: new Date().toISOString(), event: "run.failed", runId: step.run_id, workflowId: wfId, detail: "Step aborted and retries exhausted" });
+            scheduleRunCronTeardown(step.run_id);
+          } else {
+            // Reset to pending for retry
+            db.prepare(
+              "UPDATE steps SET status = 'pending', output = 'Agent session aborted - will retry', abandoned_count = ?, updated_at = datetime('now') WHERE id = ?"
+            ).run(newAbandonCount, step.id);
+            emitEvent({ ts: new Date().toISOString(), event: "step.timeout", runId: step.run_id, workflowId: wfId, stepId: step.step_id, detail: "Agent session aborted - reset to pending" });
+            logger.info(`Agent session aborted for step ${step.step_id}, reset to pending`, { runId: step.run_id });
+          }
+          break; // Found abort for this step, no need to check other sessions
+        }
+      } catch {
+        // Best-effort - skip file if unreadable
+      }
+    }
+  }
+}
 
 /**
  * Find steps that have been "running" for too long and reset them to pending.
@@ -514,6 +582,73 @@ function runHasStories(runId: string): boolean {
   return (total?.cnt ?? 0) > 0;
 }
 
+function mergeParsedOutputIntoContext(
+  context: Record<string, string>,
+  parsed: Record<string, string>,
+): void {
+  for (const [key, value] of Object.entries(parsed)) {
+    // Once a run starts with an explicit repo, keep that workspace authoritative.
+    if (key === "repo" && context[key]?.trim()) {
+      continue;
+    }
+    context[key] = value;
+  }
+}
+
+function readSetupOutput(runId: string): string {
+  const db = getDb();
+  const row = db.prepare(
+    "SELECT output FROM steps WHERE run_id = ? AND step_id = 'setup' LIMIT 1"
+  ).get(runId) as { output: string | null } | undefined;
+  return row?.output ?? "";
+}
+
+function discoverNodeCommand(repo: string, scriptName: string): string | undefined {
+  const candidates = [repo, path.join(repo, "server")];
+
+  for (const dir of candidates) {
+    const pkgPath = path.join(dir, "package.json");
+    if (!fs.existsSync(pkgPath)) continue;
+    try {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+      const scripts = pkg?.scripts ?? {};
+      if (typeof scripts[scriptName] === "string" && scripts[scriptName].trim()) {
+        return dir === repo ? `cd ${repo} && npm run ${scriptName}` : `cd ${dir} && npm run ${scriptName}`;
+      }
+    } catch {
+      // Ignore malformed package.json here; setup should be authoritative when healthy.
+    }
+  }
+
+  return undefined;
+}
+
+function hydrateExecutionCommands(runId: string, context: Record<string, string>): void {
+  const missingBuild = !context["build_cmd"]?.trim();
+  const missingTest = !context["test_cmd"]?.trim();
+  if (!missingBuild && !missingTest) return;
+
+  const parsedSetup = parseOutputKeyValues(readSetupOutput(runId));
+  if (missingBuild && parsedSetup["build_cmd"]?.trim()) {
+    context["build_cmd"] = parsedSetup["build_cmd"].trim();
+  }
+  if (missingTest && parsedSetup["test_cmd"]?.trim()) {
+    context["test_cmd"] = parsedSetup["test_cmd"].trim();
+  }
+
+  const repo = context["repo"]?.trim();
+  if (!repo) return;
+
+  if (!context["build_cmd"]?.trim()) {
+    const discoveredBuild = discoverNodeCommand(repo, "build");
+    if (discoveredBuild) context["build_cmd"] = discoveredBuild;
+  }
+  if (!context["test_cmd"]?.trim()) {
+    const discoveredTest = discoverNodeCommand(repo, "test");
+    if (discoveredTest) context["test_cmd"] = discoveredTest;
+  }
+}
+
 // ── Peek (lightweight work check) ───────────────────────────────────
 
 export type PeekResult = "HAS_WORK" | "NO_WORK";
@@ -559,6 +694,8 @@ export function claimStep(agentId: string): ClaimResult {
     cleanupAbandonedSteps();
     lastCleanupTime = now;
   }
+  // Always check for session abort events - this is real-time detection
+  checkSessionAbortEvents();
   const db = getDb();
 
   const candidates = db.prepare(
@@ -749,6 +886,8 @@ export function claimStep(agentId: string): ClaimResult {
         context["verify_feedback"] = "";
       }
 
+      hydrateExecutionCommands(step.run_id, context);
+
       const missingKeys = findMissingTemplateKeys(step.input_template, context);
       if (missingKeys.length > 0) {
         failStepWithMissingInputs(step.id, step.step_id, step.run_id, missingKeys);
@@ -780,6 +919,8 @@ export function claimStep(agentId: string): ClaimResult {
   if (hasStories.cnt > 0) {
     context["progress"] = readProgressFile(step.run_id);
   }
+
+  hydrateExecutionCommands(step.run_id, context);
 
   const missingKeys = findMissingTemplateKeys(step.input_template, context);
   if (missingKeys.length > 0) {
@@ -823,9 +964,7 @@ export function completeStep(stepId: string, output: string): { advanced: boolea
 
   // Parse KEY: value lines and merge into context
   const parsed = parseOutputKeyValues(output);
-  for (const [key, value] of Object.entries(parsed)) {
-    context[key] = value;
-  }
+  mergeParsedOutputIntoContext(context, parsed);
 
   db.prepare(
     "UPDATE runs SET context = ?, updated_at = datetime('now') WHERE id = ?"

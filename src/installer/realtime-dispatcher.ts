@@ -2,6 +2,7 @@ import { getDb } from "../db.js";
 import { logger } from "../lib/logger.js";
 import { buildAgentPrompt } from "./agent-cron.js";
 import { spawnAgentSession } from "./gateway-api.js";
+import { cleanupAbandonedSteps, checkSessionAbortEvents } from "./step-ops.js";
 
 const inflightDispatches = new Set<string>();
 
@@ -20,6 +21,12 @@ export async function dispatchPendingStepNow(params: { runId: string; stepId: st
   if (inflightDispatches.has(key)) {
     return { ok: true, skipped: true, reason: "dispatch already in flight" };
   }
+
+  // Clean up any abandoned steps before dispatching - this handles cases where
+  // previous agent attempts were aborted without reporting completion/failure
+  cleanupAbandonedSteps();
+  // Check session files for real-time abort detection
+  checkSessionAbortEvents();
 
   inflightDispatches.add(key);
   try {

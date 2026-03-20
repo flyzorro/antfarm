@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { loadWorkflowSpec } from "./workflow-spec.js";
 import { resolveWorkflowDir } from "./paths.js";
 import { getDb, nextRunNumber } from "../db.js";
@@ -6,10 +7,27 @@ import { logger } from "../lib/logger.js";
 import { ensureWorkflowCrons } from "./agent-cron.js";
 import { emitEvent } from "./events.js";
 
+function resolveRunRepo(providedRepo?: string): string {
+  const explicitRepo = providedRepo?.trim();
+  if (explicitRepo) return explicitRepo;
+
+  try {
+    return execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      cwd: process.cwd(),
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5_000,
+    }).trim();
+  } catch {
+    return "";
+  }
+}
+
 export async function runWorkflow(params: {
   workflowId: string;
   taskTitle: string;
   notifyUrl?: string;
+  repo?: string;
 }): Promise<{ id: string; runNumber: number; workflowId: string; task: string; status: string }> {
   const workflowDir = resolveWorkflowDir(params.workflowId);
   const workflow = await loadWorkflowSpec(workflowDir);
@@ -17,10 +35,12 @@ export async function runWorkflow(params: {
   const now = new Date().toISOString();
   const runId = crypto.randomUUID();
   const runNumber = nextRunNumber();
+  const repo = resolveRunRepo(params.repo);
 
   const initialContext: Record<string, string> = {
     task: params.taskTitle,
     ...workflow.context,
+    repo,
   };
 
   db.exec("BEGIN");

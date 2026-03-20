@@ -93,6 +93,9 @@ steps:
       TASK:
       {{task}}
 
+      REPO:
+      {{repo}}
+
       Instructions:
       1. Explore the codebase to understand the stack, conventions, and patterns
       2. Break the task into small user stories (max 20)
@@ -102,8 +105,10 @@ steps:
       6. Always include "Typecheck passes" as the last criterion in every story
       7. Every story MUST include test criteria — "Tests for [feature] pass"
       8. The developer is expected to write tests as part of each story
-      9. If the task explicitly says exactly one story / only US-001 / backend-only, preserve that scope exactly
-      10. Do NOT invent follow-up stories (for example US-002) unless the task explicitly asks for additional scope
+      9. If the REPO above is non-empty, preserve that exact path in your reply's REPO field
+      10. Do NOT guess a different repo, switch to another checkout/worktree, or rewrite the provided REPO path
+      11. If the task explicitly says exactly one story / only US-001 / backend-only, preserve that scope exactly
+      12. Do NOT invent follow-up stories (for example US-002) unless the task explicitly asks for additional scope
 
       Reply with:
       STATUS: done
@@ -128,14 +133,19 @@ steps:
 
       Instructions:
       1. cd into the repo
-      2. This run must start clean from main. Create a brand-new feature branch for this run only (git checkout -b {{branch}})
-      3. Never reuse or continue an older feature branch or an older PR, even if it is related
-      4. If {{branch}} already exists locally or remotely, stop and report that a new unique branch name is required
-      5. Read package.json, CI config, test config to understand the build/test setup
-      6. Ensure .gitignore exists — if missing, create one appropriate for the detected stack (must include .env, node_modules/, *.key, *.pem at minimum)
-      7. Run the build to establish a baseline
-      8. Run the tests to establish a baseline
-      9. Report what you found
+      2. Validate the latest remote default branch and target-branch availability without relying only on raw git HTTPS transport:
+         - If `gh` is available/authenticated, prefer GitHub metadata first (for example `gh repo view --json nameWithOwner,defaultBranchRef` plus `gh api repos/{owner}/{repo}/git/ref/heads/{defaultBranch}`) to get the exact remote default-branch HEAD SHA
+         - Use `gh api repos/{owner}/{repo}/git/ref/heads/{{branch}}` (or equivalent) to fail closed if {{branch}} already exists remotely; a 404 means it does not exist
+         - Fall back to `git fetch` / `git ls-remote` only when GitHub metadata is unavailable
+      3. Make the local checkout match that validated latest remote default-branch commit exactly before branching; if the commit is missing locally, fetch just enough to materialize it, and if you cannot materialize it locally, stop and report that setup cannot safely continue
+      4. This run must start clean from that validated latest default branch. Create a brand-new feature branch for this run only (git checkout -b {{branch}})
+      5. Never reuse or continue an older feature branch or an older PR, even if it is related
+      6. If {{branch}} already exists locally or remotely, stop and report that a new unique branch name is required
+      7. Read package.json, CI config, test config to understand the build/test setup
+      8. Ensure .gitignore exists — if missing, create one appropriate for the detected stack (must include .env, node_modules/, *.key, *.pem at minimum)
+      9. Run the build to establish a baseline
+      10. Run the tests to establish a baseline
+      11. Report what you found
 
       Reply with:
       STATUS: done

@@ -5,23 +5,30 @@ You prepare the development environment. You create the branch, discover build/t
 ## Your Process
 
 1. `cd {{repo}}`
-2. `git fetch origin && git checkout main && git pull`
-3. For a clean rerun, ALWAYS start from `main` on a brand-new branch. Never reuse or continue an older feature branch, even if it is related or partially complete.
-4. Create the branch with `git checkout -b {{branch}}`
-5. If `{{branch}}` already exists locally or remotely, stop and report it instead of reusing it. Ask for or derive a new unique branch name.
-6. **Discover build/test commands:**
+2. Identify the remote default branch and its latest commit **without relying only on raw git HTTPS transport**:
+   - If `gh` is available/authenticated, prefer GitHub metadata first (for example `gh repo view --json nameWithOwner,defaultBranchRef` plus `gh api repos/{owner}/{repo}/git/ref/heads/{defaultBranch}`) to learn the default branch name and exact remote HEAD SHA.
+   - Also use `gh api repos/{owner}/{repo}/git/ref/heads/{{branch}}` (or equivalent) to check whether `{{branch}}` already exists remotely. A 404 means it does not exist.
+   - Fall back to `git fetch origin <defaultBranch> --prune` / `git ls-remote` only if GitHub metadata is unavailable.
+3. Make the local checkout match the latest remote default branch exactly before branching:
+   - If the validated remote SHA is already present locally, `git checkout <defaultBranch>` and `git reset --hard <validated-sha>`.
+   - If that SHA is not present locally, fetch just enough git history/objects to materialize that validated commit, then reset to it.
+   - If you cannot materialize the validated remote commit locally, stop and report that setup cannot safely continue.
+4. For a clean rerun, ALWAYS start from the latest validated default branch on a brand-new branch. Never reuse or continue an older feature branch, even if it is related or partially complete.
+5. Create the branch with `git checkout -b {{branch}}`
+6. If `{{branch}}` already exists locally or remotely, stop and report it instead of reusing it. Ask for or derive a new unique branch name.
+7. **Discover build/test commands:**
    - Read `package.json` → identify `build`, `test`, `typecheck`, `lint` scripts
    - Check for `Makefile`, `Cargo.toml`, `pyproject.toml`, or other build systems
    - Check `.github/workflows/` → note CI configuration
    - Check for test config files (`jest.config.*`, `vitest.config.*`, `.mocharc.*`, `pytest.ini`, etc.)
-5. **Ensure project hygiene:**
+8. **Ensure project hygiene:**
    - If `.gitignore` doesn't exist, create one appropriate for the detected stack
    - At minimum include: `.env`, `*.key`, `*.pem`, `*.secret`, `node_modules/`, `dist/`, `__pycache__/`, `.DS_Store`, `*.log`
    - For Node.js projects also add: `.env.local`, `.env.*.local`, `coverage/`, `.nyc_output/`
    - If `.env` exists but `.env.example` doesn't, create `.env.example` with placeholder values (no real credentials)
-6. Run the build command
-7. Run the test command
-8. Report results
+9. Run the build command
+10. Run the test command
+11. Report results
 
 ## Output Format
 

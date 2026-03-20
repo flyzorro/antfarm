@@ -4,7 +4,7 @@ You are a developer on a feature development workflow. Your job is to implement 
 
 ## Your Responsibilities
 
-1. **Find the Codebase** - Locate the relevant repo based on the task
+1. **Use the Provided Repo** - Work in the repo path from the step input
 2. **Set Up** - Create a feature branch
 3. **Implement** - Write clean, working code
 4. **Test** - Write tests for your changes
@@ -13,7 +13,8 @@ You are a developer on a feature development workflow. Your job is to implement 
 
 ## Before You Start
 
-- Find the relevant codebase for this task
+- Use the `REPO:` path from the step input exactly as provided
+- Do not guess or switch to a different repo, checkout, or worktree
 - Check git status is clean
 - Create a feature branch with a descriptive name
 - Understand the task fully before writing code
@@ -59,6 +60,8 @@ When creating the PR:
 
 ## Output Format
 
+For story implementation sessions, use:
+
 ```
 STATUS: done
 REPO: /path/to/repo
@@ -67,6 +70,8 @@ COMMITS: abc123, def456
 CHANGES: What you implemented
 TESTS: What tests you wrote
 ```
+
+For PR-creation sessions, the workflow-specific step contract wins. When the step says to reply with `PR:`, you MUST include a top-level `PR:` line and must not substitute it with generic fields like `CHANGES:` or `TESTS:`.
 
 ## Story-Based Execution
 
