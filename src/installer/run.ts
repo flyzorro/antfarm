@@ -6,6 +6,7 @@ import { getDb, nextRunNumber } from "../db.js";
 import { logger } from "../lib/logger.js";
 import { ensureWorkflowCrons } from "./agent-cron.js";
 import { emitEvent } from "./events.js";
+import { dispatchPendingStepNow } from "./realtime-dispatcher.js";
 
 function resolveRunRepo(providedRepo?: string): string {
   const explicitRepo = providedRepo?.trim();
@@ -23,11 +24,28 @@ function resolveRunRepo(providedRepo?: string): string {
   }
 }
 
+function slugifyBranchPart(input: string): string {
+  return input
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48) || "run";
+}
+
+function generateWorkBranch(workflowId: string, taskTitle: string): string {
+  const stamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 12);
+  const taskSlug = slugifyBranchPart(taskTitle).slice(0, 24);
+  const workflowSlug = slugifyBranchPart(workflowId).slice(0, 16);
+  return `verify/${workflowSlug}-${taskSlug}-${stamp}`;
+}
+
 export async function runWorkflow(params: {
   workflowId: string;
   taskTitle: string;
   notifyUrl?: string;
   repo?: string;
+  baseBranch?: string;
+  workBranch?: string;
 }): Promise<{ id: string; runNumber: number; workflowId: string; task: string; status: string }> {
   const workflowDir = resolveWorkflowDir(params.workflowId);
   const workflow = await loadWorkflowSpec(workflowDir);
@@ -37,9 +55,16 @@ export async function runWorkflow(params: {
   const runNumber = nextRunNumber();
   const repo = resolveRunRepo(params.repo);
 
+  const baseBranch = params.baseBranch?.trim() || "main";
+  const workBranch = params.workBranch?.trim() || generateWorkBranch(params.workflowId, params.taskTitle);
+
   const initialContext: Record<string, string> = {
     task: params.taskTitle,
     ...(params.repo ? { repo: params.repo } : {}),
+    base_branch: baseBranch,
+    work_branch: workBranch,
+    // Keep legacy branch key for existing templates/helpers, but source it from run input.
+    branch: workBranch,
     ...workflow.context,
     repo,
   };
@@ -87,6 +112,19 @@ export async function runWorkflow(params: {
   emitEvent({ ts: new Date().toISOString(), event: "run.started", runId, workflowId: workflow.id });
   if (workflow.steps[0]) {
     emitEvent({ ts: new Date().toISOString(), event: "step.pending", runId, workflowId: workflow.id, stepId: workflow.steps[0].id });
+
+    // `workflow run` should kick off work immediately when possible.
+    // Keep event-driven/background dispatch for normal progression, but do an
+    // eager first-hop dispatch here so new runs do not appear idle while
+    // waiting for cron as a fallback path.
+    const dispatchResult = await dispatchPendingStepNow({ runId, stepId: workflow.steps[0].id });
+    if (!dispatchResult.ok && !dispatchResult.skipped) {
+      logger.warn(`Initial realtime dispatch failed: ${dispatchResult.reason ?? "unknown error"}`, {
+        workflowId: workflow.id,
+        runId,
+        stepId: workflow.steps[0].id,
+      });
+    }
   }
 
   logger.info(`Run started: "${params.taskTitle}"`, {

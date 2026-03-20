@@ -40,8 +40,8 @@ describe("Review step frontend visual verification", () => {
       "must reference agent-browser skill"
     );
     assert.ok(
-      input.includes("{{branch}}"),
-      "must reference branch variable"
+      input.includes("{{work_branch}}"),
+      "must reference work_branch variable"
     );
   });
 
