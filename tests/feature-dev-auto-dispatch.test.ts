@@ -329,7 +329,7 @@ exit 1
 
     const cliCalls = await fs.readFile(cliLog, "utf-8");
     assert.match(cliCalls, /cron list --json/, "preflight/list used CLI fallback");
-    assert.match(cliCalls, /cron add --json --name antfarm\/feature-dev\/planner/, "cron creation used CLI fallback");
+    assert.match(cliCalls, /cron add --json(?: --timeout 30000)? --name antfarm\/feature-dev\/planner/, "cron creation used CLI fallback");
   } finally {
     await restore();
   }

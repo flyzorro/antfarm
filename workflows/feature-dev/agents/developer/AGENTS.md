@@ -60,6 +60,8 @@ When creating the PR:
 
 ## Output Format
 
+For story implementation sessions, use:
+
 ```
 STATUS: done
 REPO: /path/to/repo
@@ -68,6 +70,8 @@ COMMITS: abc123, def456
 CHANGES: What you implemented
 TESTS: What tests you wrote
 ```
+
+For PR-creation sessions, the workflow-specific step contract wins. When the step says to reply with `PR:`, you MUST include a top-level `PR:` line and must not substitute it with generic fields like `CHANGES:` or `TESTS:`.
 
 ## Story-Based Execution
 

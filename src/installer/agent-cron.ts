@@ -26,14 +26,17 @@ Step 2 — If JSON is returned, it contains: {"stepId": "...", "runId": "...", "
 Save the stepId — you'll need it to report completion.
 The "input" field contains your FULLY RESOLVED task instructions. Read it carefully and DO the work.
 
-Step 3 — Do the work described in the input. Format your output with KEY: value lines as specified.
+Step 3 — Do the work described in the input. Format your output with KEY: value lines exactly as the claimed step requires.
+Look for sections like "Reply with:", "Reply using exactly this format:", or "Output Format" in the claimed input and copy those exact top-level field names.
+Do NOT silently replace required fields like PR, RESULTS, VERIFIED, or DECISION with generic fields like CHANGES or TESTS.
 
 Step 4 — MANDATORY: Report completion (do this IMMEDIATELY after finishing the work):
 \`\`\`
 cat <<'ANTFARM_EOF' > /tmp/antfarm-step-output.txt
+# Copy the exact KEY: value fields required by the claimed step input.
+# Example only:
 STATUS: done
-CHANGES: what you did
-TESTS: what tests you ran
+<OTHER REQUIRED FIELDS FROM THE CLAIMED STEP>
 ANTFARM_EOF
 cat /tmp/antfarm-step-output.txt | node ${cli} step complete "<stepId>"
 \`\`\`
@@ -63,14 +66,17 @@ The claimed step JSON is provided below. It contains: {"stepId": "...", "runId":
 Save the stepId — you'll need it to report completion.
 The "input" field contains your FULLY RESOLVED task instructions. Read it carefully and DO the work.
 
-Do the work described in the input. Format your output with KEY: value lines as specified.
+Do the work described in the input. Format your output with KEY: value lines exactly as the claimed step requires.
+Look for sections like "Reply with:", "Reply using exactly this format:", or "Output Format" in the claimed input and copy those exact top-level field names.
+Do NOT silently replace required fields like PR, RESULTS, VERIFIED, or DECISION with generic fields like CHANGES or TESTS.
 
 MANDATORY: Report completion (do this IMMEDIATELY after finishing the work):
 \`\`\`
 cat <<'ANTFARM_EOF' > /tmp/antfarm-step-output.txt
+# Copy the exact KEY: value fields required by the claimed step input.
+# Example only:
 STATUS: done
-CHANGES: what you did
-TESTS: what tests you ran
+<OTHER REQUIRED FIELDS FROM THE CLAIMED STEP>
 ANTFARM_EOF
 cat /tmp/antfarm-step-output.txt | node ${cli} step complete "<stepId>"
 \`\`\`
