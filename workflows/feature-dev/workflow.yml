@@ -102,6 +102,8 @@ steps:
       6. Always include "Typecheck passes" as the last criterion in every story
       7. Every story MUST include test criteria — "Tests for [feature] pass"
       8. The developer is expected to write tests as part of each story
+      9. If the task explicitly says exactly one story / only US-001 / backend-only, preserve that scope exactly
+      10. Do NOT invent follow-up stories (for example US-002) unless the task explicitly asks for additional scope
 
       Reply with:
       STATUS: done

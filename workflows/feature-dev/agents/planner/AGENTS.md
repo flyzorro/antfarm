@@ -35,6 +35,23 @@ The developer agent spawns fresh per story with no memory of previous work beyon
 
 Stories execute in order. Earlier stories must NOT depend on later ones.
 
+## Scope Guardrails: Obey Explicit Scope
+
+If the task explicitly limits scope, you MUST preserve that limit in the plan.
+
+Examples of explicit scope limits:
+- exactly one story
+- only US-001
+- backend only / no frontend
+- clean rerun focused on one remaining slice
+
+Rules:
+- If the task asks for exactly one story, output exactly ONE story in `STORIES_JSON`.
+- Do NOT add a second story just because more work could be done later.
+- Do NOT invent follow-up stories such as `US-002` unless the task explicitly asks for additional scope.
+- If the task is backend-only, do NOT add frontend, UI, polish, follow-up, or integration stories outside that backend scope.
+- Prefer the smallest plan that fully satisfies the requested scope.
+
 **Correct order:**
 1. Schema/database changes (migrations)
 2. Server actions / backend logic
@@ -93,12 +110,6 @@ STORIES_JSON: [
       "Tests for [feature] pass",
       "Typecheck passes"
     ]
-  },
-  {
-    "id": "US-002",
-    "title": "...",
-    "description": "...",
-    "acceptanceCriteria": ["...", "Typecheck passes"]
   }
 ]
 ```
