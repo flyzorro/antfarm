@@ -707,15 +707,21 @@ async function main() {
 
   if (action === "run") {
     let notifyUrl: string | undefined;
+    let repo: string | undefined;
     const runArgs = args.slice(3);
     const nuIdx = runArgs.indexOf("--notify-url");
     if (nuIdx !== -1) {
       notifyUrl = runArgs[nuIdx + 1];
       runArgs.splice(nuIdx, 2);
     }
+    const repoIdx = runArgs.indexOf("--repo");
+    if (repoIdx !== -1) {
+      repo = runArgs[repoIdx + 1];
+      runArgs.splice(repoIdx, 2);
+    }
     const taskTitle = runArgs.join(" ").trim();
     if (!taskTitle) { process.stderr.write("Missing task title.\n"); printUsage(); process.exit(1); }
-    const run = await runWorkflow({ workflowId: target, taskTitle, notifyUrl });
+    const run = await runWorkflow({ workflowId: target, taskTitle, notifyUrl, repo });
     process.stdout.write(
       [`Run: #${run.runNumber} (${run.id})`, `Workflow: ${run.workflowId}`, `Task: ${run.task}`, `Status: ${run.status}`].join("\n") + "\n",
     );
