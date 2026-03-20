@@ -69,7 +69,13 @@ function migrate(db: DatabaseSync): void {
       retry_count INTEGER DEFAULT 0,
       max_retries INTEGER DEFAULT 2,
       created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
+      updated_at TEXT NOT NULL,
+      dispatch_state TEXT NOT NULL DEFAULT 'idle',
+      finalization_state TEXT NOT NULL DEFAULT 'idle',
+      attempt_id TEXT,
+      session_key TEXT,
+      heartbeat_at TEXT,
+      finalized_at TEXT
     );
 
     CREATE TABLE IF NOT EXISTS stories (
@@ -104,6 +110,30 @@ function migrate(db: DatabaseSync): void {
   if (!colNames.has("abandoned_count")) {
     db.exec("ALTER TABLE steps ADD COLUMN abandoned_count INTEGER DEFAULT 0");
   }
+  if (!colNames.has("dispatch_state")) {
+    db.exec("ALTER TABLE steps ADD COLUMN dispatch_state TEXT NOT NULL DEFAULT 'idle'");
+  }
+  if (!colNames.has("finalization_state")) {
+    db.exec("ALTER TABLE steps ADD COLUMN finalization_state TEXT NOT NULL DEFAULT 'idle'");
+  }
+  if (!colNames.has("attempt_id")) {
+    db.exec("ALTER TABLE steps ADD COLUMN attempt_id TEXT");
+  }
+  if (!colNames.has("session_key")) {
+    db.exec("ALTER TABLE steps ADD COLUMN session_key TEXT");
+  }
+  if (!colNames.has("heartbeat_at")) {
+    db.exec("ALTER TABLE steps ADD COLUMN heartbeat_at TEXT");
+  }
+  if (!colNames.has("finalized_at")) {
+    db.exec("ALTER TABLE steps ADD COLUMN finalized_at TEXT");
+  }
+
+  db.exec("UPDATE steps SET dispatch_state = 'idle' WHERE dispatch_state IS NULL");
+  db.exec("UPDATE steps SET finalization_state = 'idle' WHERE finalization_state IS NULL");
+  db.exec("UPDATE steps SET dispatch_state = 'queued' WHERE status = 'pending' AND dispatch_state = 'idle'");
+  db.exec("UPDATE steps SET dispatch_state = 'running' WHERE status = 'running' AND dispatch_state = 'idle'");
+  db.exec("UPDATE steps SET dispatch_state = 'idle' WHERE status IN ('waiting', 'done', 'failed', 'skipped')");
 
   const runCols = db.prepare("PRAGMA table_info(runs)").all() as Array<{ name: string }>;
   const runColNames = new Set(runCols.map((c) => c.name));
