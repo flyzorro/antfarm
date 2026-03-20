@@ -93,7 +93,7 @@ function printUsage() {
       "antfarm workflow install <name>      Install a workflow",
       "antfarm workflow uninstall <name>    Uninstall a workflow (blocked if runs active)",
       "antfarm workflow uninstall --all     Uninstall all workflows (--force to override)",
-      "antfarm workflow run <name> <task>   Start a workflow run",
+      "antfarm workflow run <name> [--repo <path>] <task>   Start a workflow run",
       "antfarm workflow status <query>      Check run status (task substring, run ID prefix)",
       "antfarm workflow runs                List all workflow runs",
       "antfarm workflow resume <run-id>     Resume a failed run from where it left off",
@@ -375,7 +375,7 @@ async function main() {
       if (!result.found) {
         process.stdout.write("NO_WORK\n");
       } else {
-        process.stdout.write(JSON.stringify({ stepId: result.stepId, runId: result.runId, input: result.resolvedInput }) + "\n");
+        process.stdout.write(JSON.stringify({ stepId: result.stepId, runId: result.runId, attemptId: result.attemptId, input: result.resolvedInput }) + "\n");
       }
       return;
     }
@@ -391,14 +391,19 @@ async function main() {
         }
         output = Buffer.concat(chunks).toString("utf-8").trim();
       }
-      const result = completeStep(target, output);
+      const attemptArgIndex = args.indexOf("--attempt-id");
+      const normalizedAttemptId = attemptArgIndex >= 0 ? args[attemptArgIndex + 1] : undefined;
+      const result = completeStep(target, output, { attemptId: normalizedAttemptId });
       process.stdout.write(JSON.stringify(result) + "\n");
       return;
     }
     if (action === "fail") {
       if (!target) { process.stderr.write("Missing step-id.\n"); process.exit(1); }
-      const error = args.slice(3).join(" ").trim() || "Unknown error";
-      const result = await failStep(target, error);
+      const attemptArgIndex = args.indexOf("--attempt-id");
+      const normalizedAttemptId = attemptArgIndex >= 0 ? args[attemptArgIndex + 1] : undefined;
+      const errorArgs = attemptArgIndex >= 0 ? args.slice(3, attemptArgIndex) : args.slice(3);
+      const error = errorArgs.join(" ").trim() || "Unknown error";
+      const result = await failStep(target, error, { attemptId: normalizedAttemptId });
       process.stdout.write(JSON.stringify(result) + "\n");
       return;
     }
@@ -671,15 +676,21 @@ async function main() {
 
   if (action === "run") {
     let notifyUrl: string | undefined;
+    let repo: string | undefined;
     const runArgs = args.slice(3);
     const nuIdx = runArgs.indexOf("--notify-url");
     if (nuIdx !== -1) {
       notifyUrl = runArgs[nuIdx + 1];
       runArgs.splice(nuIdx, 2);
     }
+    const repoIdx = runArgs.indexOf("--repo");
+    if (repoIdx !== -1) {
+      repo = runArgs[repoIdx + 1];
+      runArgs.splice(repoIdx, 2);
+    }
     const taskTitle = runArgs.join(" ").trim();
     if (!taskTitle) { process.stderr.write("Missing task title.\n"); printUsage(); process.exit(1); }
-    const run = await runWorkflow({ workflowId: target, taskTitle, notifyUrl });
+    const run = await runWorkflow({ workflowId: target, taskTitle, notifyUrl, repo });
     process.stdout.write(
       [`Run: #${run.runNumber} (${run.id})`, `Workflow: ${run.workflowId}`, `Task: ${run.task}`, `Status: ${run.status}`].join("\n") + "\n",
     );

@@ -22,8 +22,8 @@ node ${cli} step claim "${fullAgentId}"
 
 If output is "NO_WORK", reply HEARTBEAT_OK and stop.
 
-Step 2 — If JSON is returned, it contains: {"stepId": "...", "runId": "...", "input": "..."}
-Save the stepId — you'll need it to report completion.
+Step 2 — If JSON is returned, it contains: {"stepId": "...", "runId": "...", "attemptId": "...", "input": "..."}
+Save both the stepId and attemptId — you'll need them to report completion.
 The "input" field contains your FULLY RESOLVED task instructions. Read it carefully and DO the work.
 
 Step 3 — Do the work described in the input. Format your output with KEY: value lines exactly as the claimed step requires.
@@ -38,12 +38,12 @@ cat <<'ANTFARM_EOF' > /tmp/antfarm-step-output.txt
 STATUS: done
 <OTHER REQUIRED FIELDS FROM THE CLAIMED STEP>
 ANTFARM_EOF
-cat /tmp/antfarm-step-output.txt | node ${cli} step complete "<stepId>"
+cat /tmp/antfarm-step-output.txt | node ${cli} step complete "<stepId>" --attempt-id "<attemptId>"
 \`\`\`
 
 If the work FAILED:
 \`\`\`
-node ${cli} step fail "<stepId>" "description of what went wrong"
+node ${cli} step fail "<stepId>" "description of what went wrong" --attempt-id "<attemptId>"
 \`\`\`
 
 RULES:
@@ -62,8 +62,8 @@ export function buildWorkPrompt(workflowId: string, agentId: string): string {
 
 ⚠️ CRITICAL: You MUST call "step complete" or "step fail" before ending your session. If you don't, the workflow will be stuck forever. This is non-negotiable.
 
-The claimed step JSON is provided below. It contains: {"stepId": "...", "runId": "...", "input": "..."}
-Save the stepId — you'll need it to report completion.
+The claimed step JSON is provided below. It contains: {"stepId": "...", "runId": "...", "attemptId": "...", "input": "..."}
+Save both the stepId and attemptId — you'll need them to report completion.
 The "input" field contains your FULLY RESOLVED task instructions. Read it carefully and DO the work.
 
 Do the work described in the input. Format your output with KEY: value lines exactly as the claimed step requires.

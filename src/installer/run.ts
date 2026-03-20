@@ -39,6 +39,7 @@ export async function runWorkflow(params: {
 
   const initialContext: Record<string, string> = {
     task: params.taskTitle,
+    ...(params.repo ? { repo: params.repo } : {}),
     ...workflow.context,
     repo,
   };
