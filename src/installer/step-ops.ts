@@ -281,9 +281,9 @@ function parseAndInsertStories(output: string, runId: string): void {
 
 // ── Abandoned Step Cleanup ──────────────────────────────────────────
 
-// Reduced threshold: 5 minutes (was max role timeout + 5 min buffer = ~35 min)
-// This catches aborted agents that never report completion/failure
-const ABANDONED_THRESHOLD_MS = 5 * 60 * 1000; 
+// Threshold: 15 minutes for regular steps, but checkSessionAbortEvents() provides real-time abort detection
+// The timeout is a fallback for when we can't detect aborts via session files
+const ABANDONED_THRESHOLD_MS = 15 * 60 * 1000; 
 const MAX_ABANDON_RESETS = 3; // fewer retries for abandoned steps - abort usually means fatal
 
 /**
