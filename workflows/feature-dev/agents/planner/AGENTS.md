@@ -52,6 +52,14 @@ Rules:
 - If the task is backend-only, do NOT add frontend, UI, polish, follow-up, or integration stories outside that backend scope.
 - Prefer the smallest plan that fully satisfies the requested scope.
 
+## Repo Handling
+
+If the task input already includes a repo path, treat it as authoritative.
+
+- Echo that exact path in your `REPO:` line.
+- Do NOT guess a different repo, substitute another checkout/worktree, or rewrite the provided path.
+- Only infer the repo yourself when the input did not provide one.
+
 **Correct order:**
 1. Schema/database changes (migrations)
 2. Server actions / backend logic

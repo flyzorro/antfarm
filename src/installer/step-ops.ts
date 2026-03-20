@@ -514,6 +514,19 @@ function runHasStories(runId: string): boolean {
   return (total?.cnt ?? 0) > 0;
 }
 
+function mergeParsedOutputIntoContext(
+  context: Record<string, string>,
+  parsed: Record<string, string>,
+): void {
+  for (const [key, value] of Object.entries(parsed)) {
+    // Once a run starts with an explicit repo, keep that workspace authoritative.
+    if (key === "repo" && context[key]?.trim()) {
+      continue;
+    }
+    context[key] = value;
+  }
+}
+
 // ── Peek (lightweight work check) ───────────────────────────────────
 
 export type PeekResult = "HAS_WORK" | "NO_WORK";
@@ -823,9 +836,7 @@ export function completeStep(stepId: string, output: string): { advanced: boolea
 
   // Parse KEY: value lines and merge into context
   const parsed = parseOutputKeyValues(output);
-  for (const [key, value] of Object.entries(parsed)) {
-    context[key] = value;
-  }
+  mergeParsedOutputIntoContext(context, parsed);
 
   db.prepare(
     "UPDATE runs SET context = ?, updated_at = datetime('now') WHERE id = ?"
