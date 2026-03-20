@@ -287,6 +287,72 @@ const ABANDONED_THRESHOLD_MS = 5 * 60 * 1000;
 const MAX_ABANDON_RESETS = 3; // fewer retries for abandoned steps - abort usually means fatal
 
 /**
+ * Check running steps by inspecting their agent session files for abort events.
+ * This provides real-time detection of agent crashes/aborts without waiting for timeout.
+ * Looks for openclaw:prompt_error events with "aborted" in the session JSONL files.
+ */
+export function checkSessionAbortEvents(): void {
+  const db = getDb();
+  const agentsDir = path.join(os.homedir(), ".openclaw", "agents");
+
+  // Find all running steps
+  const runningSteps = db.prepare(
+    "SELECT id, step_id, run_id, agent_id FROM steps WHERE status = 'running'"
+  ).all() as { id: string; step_id: string; run_id: string; agent_id: string }[];
+
+  for (const step of runningSteps) {
+    // Try to find session files for this agent
+    // Session files are in ~/.openclaw/agents/{agent_id}/sessions/
+    const agentDir = path.join(agentsDir, step.agent_id, "sessions");
+    if (!fs.existsSync(agentDir)) continue;
+
+    // Find recent session files (last 5)
+    const sessionFiles = fs.readdirSync(agentDir)
+      .filter(f => f.endsWith(".jsonl"))
+      .sort((a, b) => b.localeCompare(a))
+      .slice(0, 5);
+
+    for (const sessionFile of sessionFiles) {
+      const sessionPath = path.join(agentDir, sessionFile);
+      try {
+        const content = fs.readFileSync(sessionPath, "utf-8");
+        // Check for abort/error events
+        if (content.includes('"error":"aborted"') || 
+            content.includes('"error":"cancelled"') ||
+            content.includes('"customType":"openclaw:prompt-error"')) {
+          // Found an aborted session - mark step as failed/pending
+          const wfId = getWorkflowId(step.run_id);
+          const newAbandonCount = 1;
+          
+          if (newAbandonCount >= MAX_ABANDON_RESETS) {
+            // Too many abandons - fail the step and run
+            db.prepare(
+              "UPDATE steps SET status = 'failed', output = 'Agent session aborted without completing', abandoned_count = ?, updated_at = datetime('now') WHERE id = ?"
+            ).run(newAbandonCount, step.id);
+            db.prepare(
+              "UPDATE runs SET status = 'failed', updated_at = datetime('now') WHERE id = ?"
+            ).run(step.run_id);
+            emitEvent({ ts: new Date().toISOString(), event: "step.failed", runId: step.run_id, workflowId: wfId, stepId: step.step_id, detail: "Agent session aborted" });
+            emitEvent({ ts: new Date().toISOString(), event: "run.failed", runId: step.run_id, workflowId: wfId, detail: "Step aborted and retries exhausted" });
+            scheduleRunCronTeardown(step.run_id);
+          } else {
+            // Reset to pending for retry
+            db.prepare(
+              "UPDATE steps SET status = 'pending', output = 'Agent session aborted - will retry', abandoned_count = ?, updated_at = datetime('now') WHERE id = ?"
+            ).run(newAbandonCount, step.id);
+            emitEvent({ ts: new Date().toISOString(), event: "step.timeout", runId: step.run_id, workflowId: wfId, stepId: step.step_id, detail: "Agent session aborted - reset to pending" });
+            logger.info(`Agent session aborted for step ${step.step_id}, reset to pending`, { runId: step.run_id });
+          }
+          break; // Found abort for this step, no need to check other sessions
+        }
+      } catch {
+        // Best-effort - skip file if unreadable
+      }
+    }
+  }
+}
+
+/**
  * Find steps that have been "running" for too long and reset them to pending.
  * This catches cases where an agent claimed a step but never completed/failed it.
  * Exported so it can be called from medic/health-check crons independently of claimStep.
@@ -628,6 +694,8 @@ export function claimStep(agentId: string): ClaimResult {
     cleanupAbandonedSteps();
     lastCleanupTime = now;
   }
+  // Always check for session abort events - this is real-time detection
+  checkSessionAbortEvents();
   const db = getDb();
 
   const candidates = db.prepare(
