@@ -527,6 +527,60 @@ function mergeParsedOutputIntoContext(
   }
 }
 
+function readSetupOutput(runId: string): string {
+  const db = getDb();
+  const row = db.prepare(
+    "SELECT output FROM steps WHERE run_id = ? AND step_id = 'setup' LIMIT 1"
+  ).get(runId) as { output: string | null } | undefined;
+  return row?.output ?? "";
+}
+
+function discoverNodeCommand(repo: string, scriptName: string): string | undefined {
+  const candidates = [repo, path.join(repo, "server")];
+
+  for (const dir of candidates) {
+    const pkgPath = path.join(dir, "package.json");
+    if (!fs.existsSync(pkgPath)) continue;
+    try {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+      const scripts = pkg?.scripts ?? {};
+      if (typeof scripts[scriptName] === "string" && scripts[scriptName].trim()) {
+        return dir === repo ? `cd ${repo} && npm run ${scriptName}` : `cd ${dir} && npm run ${scriptName}`;
+      }
+    } catch {
+      // Ignore malformed package.json here; setup should be authoritative when healthy.
+    }
+  }
+
+  return undefined;
+}
+
+function hydrateExecutionCommands(runId: string, context: Record<string, string>): void {
+  const missingBuild = !context["build_cmd"]?.trim();
+  const missingTest = !context["test_cmd"]?.trim();
+  if (!missingBuild && !missingTest) return;
+
+  const parsedSetup = parseOutputKeyValues(readSetupOutput(runId));
+  if (missingBuild && parsedSetup["build_cmd"]?.trim()) {
+    context["build_cmd"] = parsedSetup["build_cmd"].trim();
+  }
+  if (missingTest && parsedSetup["test_cmd"]?.trim()) {
+    context["test_cmd"] = parsedSetup["test_cmd"].trim();
+  }
+
+  const repo = context["repo"]?.trim();
+  if (!repo) return;
+
+  if (!context["build_cmd"]?.trim()) {
+    const discoveredBuild = discoverNodeCommand(repo, "build");
+    if (discoveredBuild) context["build_cmd"] = discoveredBuild;
+  }
+  if (!context["test_cmd"]?.trim()) {
+    const discoveredTest = discoverNodeCommand(repo, "test");
+    if (discoveredTest) context["test_cmd"] = discoveredTest;
+  }
+}
+
 // ── Peek (lightweight work check) ───────────────────────────────────
 
 export type PeekResult = "HAS_WORK" | "NO_WORK";
@@ -762,6 +816,8 @@ export function claimStep(agentId: string): ClaimResult {
         context["verify_feedback"] = "";
       }
 
+      hydrateExecutionCommands(step.run_id, context);
+
       const missingKeys = findMissingTemplateKeys(step.input_template, context);
       if (missingKeys.length > 0) {
         failStepWithMissingInputs(step.id, step.step_id, step.run_id, missingKeys);
@@ -793,6 +849,8 @@ export function claimStep(agentId: string): ClaimResult {
   if (hasStories.cnt > 0) {
     context["progress"] = readProgressFile(step.run_id);
   }
+
+  hydrateExecutionCommands(step.run_id, context);
 
   const missingKeys = findMissingTemplateKeys(step.input_template, context);
   if (missingKeys.length > 0) {
