@@ -2,6 +2,8 @@ import { getDb } from "../db.js";
 import { logger } from "../lib/logger.js";
 import { buildAgentPrompt } from "./agent-cron.js";
 import { spawnAgentSession } from "./gateway-api.js";
+import { loadWorkflowSpec } from "./workflow-spec.js";
+import { resolveWorkflowDir } from "./paths.js";
 
 const inflightDispatches = new Set<string>();
 
@@ -9,10 +11,18 @@ function getDispatchKey(runId: string, stepId: string): string {
   return `${runId}:${stepId}`;
 }
 
-function buildTask(step: { agent_id: string; workflow_id: string }): string {
+async function resolveAgentDispatchConfig(step: { agent_id: string; workflow_id: string }): Promise<{ task: string; timeoutSeconds?: number }> {
   const prefix = `${step.workflow_id}_`;
   const localAgentId = step.agent_id.startsWith(prefix) ? step.agent_id.slice(prefix.length) : step.agent_id;
-  return buildAgentPrompt(step.workflow_id, localAgentId);
+  const task = buildAgentPrompt(step.workflow_id, localAgentId);
+
+  try {
+    const workflow = await loadWorkflowSpec(resolveWorkflowDir(step.workflow_id));
+    const agent = workflow.agents.find((entry) => entry.id === localAgentId);
+    return { task, timeoutSeconds: agent?.timeoutSeconds };
+  } catch {
+    return { task };
+  }
 }
 
 export async function dispatchPendingStepNow(params: { runId: string; stepId: string }): Promise<{ ok: boolean; skipped?: boolean; reason?: string }> {
@@ -42,8 +52,13 @@ export async function dispatchPendingStepNow(params: { runId: string; stepId: st
       return { ok: true, skipped: true, reason: "step no longer pending" };
     }
 
-    const task = buildTask(step);
-    const result = await spawnAgentSession({ agentId: step.agent_id, task, model: undefined });
+    const dispatch = await resolveAgentDispatchConfig(step);
+    const result = await spawnAgentSession({
+      agentId: step.agent_id,
+      task: dispatch.task,
+      model: undefined,
+      timeoutSeconds: dispatch.timeoutSeconds,
+    });
     if (!result.ok) {
       logger.warn(`Realtime dispatch failed: ${result.error ?? "unknown error"}`, {
         runId: step.run_id,

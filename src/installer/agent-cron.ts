@@ -125,19 +125,13 @@ async function resolveAgentCronModel(agentId: string, requestedModel?: string): 
   return requestedModel;
 }
 
-export function buildPollingPrompt(workflowId: string, agentId: string, workModel?: string): string {
+export function buildPollingPrompt(workflowId: string, agentId: string, workModel?: string, sessionTimeoutSeconds = 1800): string {
   const fullAgentId = `${workflowId}_${agentId}`;
   const cli = resolveAntfarmCli();
   const model = workModel ?? "default";
   const workPrompt = buildWorkPrompt(workflowId, agentId);
 
-  return `Step 1 — Quick check for pending work (lightweight, no side effects):
-\`\`\`
-node ${cli} step peek "${fullAgentId}"
-\`\`\`
-If output is "NO_WORK", reply HEARTBEAT_OK and stop immediately. Do NOT run step claim.
-
-Step 2 — If "HAS_WORK", claim the step:
+  return `Step 1 — Claim pending work directly:
 \`\`\`
 node ${cli} step claim "${fullAgentId}"
 \`\`\`
@@ -145,8 +139,12 @@ If output is "NO_WORK", reply HEARTBEAT_OK and stop.
 
 If JSON is returned, parse it to extract stepId, runId, and input fields.
 Then call sessions_spawn with these parameters:
+- runtime: "subagent"
+- mode: "run"
 - agentId: "${fullAgentId}"
 - model: "${model}"
+- timeoutSeconds: ${sessionTimeoutSeconds}
+- runTimeoutSeconds: ${sessionTimeoutSeconds}
 - task: The full work prompt below, followed by "\\n\\nCLAIMED STEP JSON:\\n" and the exact JSON output from step claim.
 
 Full work prompt to include in the spawned task:
@@ -200,7 +198,7 @@ export async function setupAgentCrons(workflow: WorkflowSpec): Promise<void> {
     const pollingModel = await resolveAgentCronModel(agentId, requestedPollingModel);
     const requestedWorkModel = agent.model ?? workflowPollingModel;
     const workModel = await resolveAgentCronModel(agentId, requestedWorkModel);
-    const prompt = buildPollingPrompt(workflow.id, agent.id, workModel);
+    const prompt = buildPollingPrompt(workflow.id, agent.id, workModel, agent.timeoutSeconds ?? 1800);
     const timeoutSeconds = workflowPollingTimeout;
 
     const result = await createAgentCronJob({

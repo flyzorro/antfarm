@@ -428,12 +428,17 @@ export async function deleteAgentCronJobs(namePrefix: string): Promise<void> {
   }
 }
 
-export async function spawnAgentSession(params: { agentId: string; task: string; model?: string }): Promise<{ ok: boolean; error?: string }> {
+export async function spawnAgentSession(params: { agentId: string; task: string; model?: string; timeoutSeconds?: number }): Promise<{ ok: boolean; error?: string }> {
+  const timeoutSeconds = params.timeoutSeconds ?? 1800;
   const payload = {
     tool: "sessions_spawn",
     args: {
       agentId: params.agentId,
       task: params.task,
+      runtime: "subagent",
+      mode: "run",
+      timeoutSeconds,
+      runTimeoutSeconds: timeoutSeconds,
       ...(params.model ? { model: params.model } : {}),
     },
     sessionKey: "agent:main:main",
@@ -464,7 +469,15 @@ export async function spawnAgentSession(params: { agentId: string; task: string;
   }
 
   try {
-    const args = ["tool", "run", "--tool", "sessions_spawn", "--session", "agent:main:main", "--json", "--agent", params.agentId, "--task", params.task];
+    const args = [
+      "tool", "run", "--tool", "sessions_spawn", "--session", "agent:main:main", "--json",
+      "--agent", params.agentId,
+      "--task", params.task,
+      "--runtime", "subagent",
+      "--mode", "run",
+      "--timeout-seconds", `${timeoutSeconds}`,
+      "--run-timeout-seconds", `${timeoutSeconds}`,
+    ];
     if (params.model) args.push("--model", params.model);
     await runCli(args);
     return { ok: true };
