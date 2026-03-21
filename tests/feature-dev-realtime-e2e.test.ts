@@ -64,12 +64,12 @@ test("feature-dev emits realtime dispatches across the whole 7-step pipeline", a
     const { claimStep, completeStep } = await freshImport<typeof import("../dist/installer/step-ops.js")>("../dist/installer/step-ops.js");
 
     await installWorkflow({ workflowId: "feature-dev" });
-    const run = await runWorkflow({ workflowId: "feature-dev", taskTitle: "Add realtime dispatch" });
+    const run = await runWorkflow({ workflowId: "feature-dev", taskTitle: "Add realtime dispatch", workBranch: "feat/realtime" });
     await tick();
 
     const planner = claimStep("feature-dev_planner");
     assert.equal(planner.found, true);
-    completeStep(planner.stepId!, `STATUS: done\nREPO: /tmp/repo\nBRANCH: feat/realtime\nSTORIES_JSON: [{"id":"story-1","title":"Implement feature","description":"do it","acceptance_criteria":["Tests for feature pass","Typecheck passes"]}]`);
+    completeStep(planner.stepId!, `STATUS: done\nREPO: /tmp/repo\nSTORIES_JSON: [{"id":"story-1","title":"Implement feature","description":"do it","acceptance_criteria":["Tests for feature pass","Typecheck passes"]}]`);
     await tick();
 
     const setup = claimStep("feature-dev_setup");
@@ -355,10 +355,10 @@ test("feature-dev PR step still claims when tester outputs mixed-case markdown k
     const { claimStep, completeStep } = await freshImport<typeof import("../dist/installer/step-ops.js")>("../dist/installer/step-ops.js");
 
     await installWorkflow({ workflowId: "feature-dev" });
-    await runWorkflow({ workflowId: "feature-dev", taskTitle: "Preserve PR handoff" });
+    await runWorkflow({ workflowId: "feature-dev", taskTitle: "Preserve PR handoff", workBranch: "feat/realtime" });
     await tick();
 
-    completeStep(claimStep("feature-dev_planner").stepId!, `STATUS: done\nREPO: /tmp/repo\nBRANCH: feat/realtime\nSTORIES_JSON: [{"id":"story-1","title":"Implement feature","description":"do it","acceptance_criteria":["Tests for feature pass","Typecheck passes"]}]`);
+    completeStep(claimStep("feature-dev_planner").stepId!, `STATUS: done\nREPO: /tmp/repo\nSTORIES_JSON: [{"id":"story-1","title":"Implement feature","description":"do it","acceptance_criteria":["Tests for feature pass","Typecheck passes"]}]`);
     await tick();
     completeStep(claimStep("feature-dev_setup").stepId!, `STATUS: done\nBUILD_CMD: npm run build\nTEST_CMD: npm test\nCI_NOTES: none\nBASELINE: green`);
     await tick();
@@ -421,12 +421,11 @@ test("feature-dev fails closed before re-claiming a verify_each story that alrea
     const dbMod = await import("../dist/db.js");
 
     await installWorkflow({ workflowId: "feature-dev" });
-    const run = await runWorkflow({ workflowId: "feature-dev", taskTitle: "Stop before exhausted verify_each re-claim" });
+    const run = await runWorkflow({ workflowId: "feature-dev", taskTitle: "Stop before exhausted verify_each re-claim", workBranch: "feat/retry-guard" });
     await tick();
 
     completeStep(claimStep("feature-dev_planner").stepId!, `STATUS: done
 REPO: /tmp/repo
-BRANCH: feat/retry-guard
 STORIES_JSON: [{"id":"story-1","title":"Implement feature","description":"do it","acceptance_criteria":["Tests for feature pass","Typecheck passes"]}]`);
     await tick();
     completeStep(claimStep("feature-dev_setup").stepId!, `STATUS: done
@@ -514,12 +513,11 @@ test("feature-dev fails closed when tester reports retry instead of done", async
     const dbMod = await import("../dist/db.js");
 
     await installWorkflow({ workflowId: "feature-dev" });
-    const run = await runWorkflow({ workflowId: "feature-dev", taskTitle: "Fail closed on tester retry" });
+    const run = await runWorkflow({ workflowId: "feature-dev", taskTitle: "Fail closed on tester retry", workBranch: "feat/tester-retry" });
     await tick();
 
     completeStep(claimStep("feature-dev_planner").stepId!, `STATUS: done
 REPO: /tmp/repo
-BRANCH: feat/realtime
 STORIES_JSON: [{"id":"story-1","title":"Implement feature","description":"do it","acceptance_criteria":["Tests for feature pass","Typecheck passes"]}]`);
     await tick();
     completeStep(claimStep("feature-dev_setup").stepId!, `STATUS: done

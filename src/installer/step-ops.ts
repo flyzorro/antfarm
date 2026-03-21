@@ -819,8 +819,10 @@ export function claimStep(agentId: string): ClaimResult {
   // Always inject run_id so templates can use {{run_id}} (e.g. for scoped progress files)
   context["run_id"] = step.run_id;
 
-  // Compute has_frontend_changes from git diff when repo and branch are available
-  if (context["repo"] && context["branch"]) {
+  // Compute has_frontend_changes only for steps that actually reference it.
+  // Fresh planner/setup claims may declare a future work branch name that does
+  // not exist as a git ref yet, so eagerly diffing base..branch here is wrong.
+  if (step.input_template?.includes("{{has_frontend_changes}}") && context["repo"] && context["branch"]) {
     context["has_frontend_changes"] = computeHasFrontendChanges(context["repo"], context["branch"]);
   } else {
     context["has_frontend_changes"] = "false";
@@ -1037,6 +1039,11 @@ export function completeStep(stepId: string, output: string, opts?: { attemptId?
   // Parse KEY: value lines and merge into context
   const parsed = parseOutputKeyValues(output);
   mergeParsedOutputIntoContext(context, parsed);
+  // Keep legacy branch key pinned to work_branch so older templates/helpers
+  // cannot accidentally corrupt branch selection back to base/main.
+  if (context["work_branch"]?.trim()) {
+    context["branch"] = context["work_branch"].trim();
+  }
 
   db.prepare(
     "UPDATE runs SET context = ?, updated_at = datetime('now') WHERE id = ?"

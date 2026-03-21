@@ -93,7 +93,7 @@ function printUsage() {
       "antfarm workflow install <name>      Install a workflow",
       "antfarm workflow uninstall <name>    Uninstall a workflow (blocked if runs active)",
       "antfarm workflow uninstall --all     Uninstall all workflows (--force to override)",
-      "antfarm workflow run <name> [--repo <path>] <task>   Start a workflow run",
+      "antfarm workflow run <name> [--repo <path>] [--base-branch <name>] [--work-branch <name>] <task>   Start a workflow run",
       "antfarm workflow status <query>      Check run status (task substring, run ID prefix)",
       "antfarm workflow runs                List all workflow runs",
       "antfarm workflow resume <run-id>     Resume a failed run from where it left off",
@@ -381,17 +381,16 @@ async function main() {
     }
     if (action === "complete") {
       if (!target) { process.stderr.write("Missing step-id.\n"); process.exit(1); }
-      // Read output from args or stdin
-      let output = args.slice(3).join(" ").trim();
+      const attemptArgIndex = args.indexOf("--attempt-id");
+      const outputArgs = attemptArgIndex >= 0 ? args.slice(3, attemptArgIndex) : args.slice(3);
+      let output = outputArgs.join(" ").trim();
       if (!output) {
-        // Read from stdin (piped input)
         const chunks: Buffer[] = [];
         for await (const chunk of process.stdin) {
           chunks.push(chunk);
         }
         output = Buffer.concat(chunks).toString("utf-8").trim();
       }
-      const attemptArgIndex = args.indexOf("--attempt-id");
       const normalizedAttemptId = attemptArgIndex >= 0 ? args[attemptArgIndex + 1] : undefined;
       const result = completeStep(target, output, { attemptId: normalizedAttemptId });
       process.stdout.write(JSON.stringify(result) + "\n");
@@ -677,6 +676,8 @@ async function main() {
   if (action === "run") {
     let notifyUrl: string | undefined;
     let repo: string | undefined;
+    let baseBranch: string | undefined;
+    let workBranch: string | undefined;
     const runArgs = args.slice(3);
     const nuIdx = runArgs.indexOf("--notify-url");
     if (nuIdx !== -1) {
@@ -688,9 +689,19 @@ async function main() {
       repo = runArgs[repoIdx + 1];
       runArgs.splice(repoIdx, 2);
     }
+    const baseBranchIdx = runArgs.indexOf("--base-branch");
+    if (baseBranchIdx !== -1) {
+      baseBranch = runArgs[baseBranchIdx + 1];
+      runArgs.splice(baseBranchIdx, 2);
+    }
+    const workBranchIdx = runArgs.indexOf("--work-branch");
+    if (workBranchIdx !== -1) {
+      workBranch = runArgs[workBranchIdx + 1];
+      runArgs.splice(workBranchIdx, 2);
+    }
     const taskTitle = runArgs.join(" ").trim();
     if (!taskTitle) { process.stderr.write("Missing task title.\n"); printUsage(); process.exit(1); }
-    const run = await runWorkflow({ workflowId: target, taskTitle, notifyUrl, repo });
+    const run = await runWorkflow({ workflowId: target, taskTitle, notifyUrl, repo, baseBranch, workBranch });
     process.stdout.write(
       [`Run: #${run.runNumber} (${run.id})`, `Workflow: ${run.workflowId}`, `Task: ${run.task}`, `Status: ${run.status}`].join("\n") + "\n",
     );

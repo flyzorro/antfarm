@@ -106,7 +106,7 @@ Your output MUST include these KEY: VALUE lines:
 ```
 STATUS: done
 REPO: /path/to/repo
-BRANCH: feature-branch-name
+WORK_BRANCH: exact-work-branch-from-input
 STORIES_JSON: [
   {
     "id": "US-001",
@@ -123,6 +123,10 @@ STORIES_JSON: [
 ```
 
 **STORIES_JSON** must be valid JSON. The array is parsed by the pipeline to create trackable story records.
+
+Do NOT invent or choose the working branch name. The run context supplies the branch; planning is only responsible for repo understanding and story decomposition.
+You MUST echo the exact input branch back as `WORK_BRANCH`.
+Do NOT output `BRANCH:` at all.
 
 ## What NOT To Do
 

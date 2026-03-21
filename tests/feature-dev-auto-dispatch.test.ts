@@ -156,7 +156,6 @@ function makeStepOutput(stepId: string): string {
       return [
         "STATUS: done",
         "REPO: /tmp/fake-feature-dev-repo",
-        "BRANCH: feat/auto-dispatch",
         "STORIES_JSON: [",
         '  {"id":"story-1","title":"Build API","description":"Add backend behavior","acceptance_criteria":["API works","Typecheck passes"]},',
         '  {"id":"story-2","title":"Polish UI","description":"Add frontend behavior","acceptance_criteria":["UI works","Typecheck passes"]}',
@@ -210,7 +209,7 @@ test("feature-dev run self-advances through all seven steps via agent cron polli
   try {
     const { runWorkflow, claimStep, peekStep, completeStep, getWorkflowStatus, getRunEvents, getDb } = await loadModules();
 
-    const run = await runWorkflow({ workflowId: "feature-dev", taskTitle: "Ship auto-dispatch proof" });
+    const run = await runWorkflow({ workflowId: "feature-dev", taskTitle: "Ship auto-dispatch proof", workBranch: "feat/auto-dispatch" });
   assert.equal(run.status, "running");
   assert.equal(jobs.length, 6, "feature-dev provisions one cron per unique agent");
 

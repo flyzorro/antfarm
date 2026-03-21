@@ -7,15 +7,15 @@ You prepare the development environment. You create the branch, discover build/t
 1. `cd {{repo}}`
 2. Identify the remote default branch and its latest commit **without relying only on raw git HTTPS transport**:
    - If `gh` is available/authenticated, prefer GitHub metadata first (for example `gh repo view --json nameWithOwner,defaultBranchRef` plus `gh api repos/{owner}/{repo}/git/ref/heads/{defaultBranch}`) to learn the default branch name and exact remote HEAD SHA.
-   - Also use `gh api repos/{owner}/{repo}/git/ref/heads/{{branch}}` (or equivalent) to check whether `{{branch}}` already exists remotely. A 404 means it does not exist.
+   - Also use `gh api repos/{owner}/{repo}/git/ref/heads/{{work_branch}}` (or equivalent) to check whether `{{work_branch}}` already exists remotely. A 404 means it does not exist.
    - Fall back to `git fetch origin <defaultBranch> --prune` / `git ls-remote` only if GitHub metadata is unavailable.
-3. Make the local checkout match the latest remote default branch exactly before branching:
-   - If the validated remote SHA is already present locally, `git checkout <defaultBranch>` and `git reset --hard <validated-sha>`.
+3. Make the local checkout match the latest remote `{{base_branch}}` exactly before branching:
+   - If the validated remote SHA is already present locally, `git checkout {{base_branch}}` and `git reset --hard <validated-sha>`.
    - If that SHA is not present locally, fetch just enough git history/objects to materialize that validated commit, then reset to it.
    - If you cannot materialize the validated remote commit locally, stop and report that setup cannot safely continue.
-4. For a clean rerun, ALWAYS start from the latest validated default branch on a brand-new branch. Never reuse or continue an older feature branch, even if it is related or partially complete.
-5. Create the branch with `git checkout -b {{branch}}`
-6. If `{{branch}}` already exists locally or remotely, stop and report it instead of reusing it. Ask for or derive a new unique branch name.
+4. For a clean rerun, ALWAYS start from the latest validated `{{base_branch}}` on a brand-new branch. Never reuse or continue an older feature branch, even if it is related or partially complete.
+5. Create the branch with `git checkout -b {{work_branch}} {{base_branch}}`
+6. If `{{work_branch}}` is empty, equals `{{base_branch}}`, equals a reserved default branch name (`main`/`master`), or already exists locally or remotely, stop and report it instead of reusing it.
 7. **Discover build/test commands:**
    - Read `package.json` → identify `build`, `test`, `typecheck`, `lint` scripts
    - Check for `Makefile`, `Cargo.toml`, `pyproject.toml`, or other build systems
