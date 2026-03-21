@@ -6,6 +6,8 @@ describe("buildWorkPrompt", () => {
   it("contains step complete instructions", () => {
     const prompt = buildWorkPrompt("feature-dev", "developer");
     assert.ok(prompt.includes("step complete"));
+    assert.ok(prompt.includes("FULL final step output"));
+    assert.ok(prompt.includes("STORIES_JSON"));
   });
 
   it("contains step fail instructions", () => {

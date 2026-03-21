@@ -161,4 +161,32 @@ describe("E2E: frontend change detection in verify flow", () => {
     assert.ok(result.found);
     assert.ok(result.resolvedInput!.includes("Has frontend changes: false"));
   });
+
+  it("does not compute has_frontend_changes for steps that do not reference it", () => {
+    const db = getDb();
+    const runId = randomUUID();
+    const now = new Date().toISOString();
+    const context = JSON.stringify({
+      task: "plan work",
+      repo: tmpDir,
+      branch: "nonexistent-branch",
+    });
+
+    db.prepare(
+      `INSERT INTO runs (id, workflow_id, task, status, context, created_at, updated_at)
+       VALUES (?, 'test-workflow', 'test task', 'running', ?, ?, ?)`
+    ).run(runId, context, now, now);
+
+    const stepId = randomUUID();
+    db.prepare(
+      `INSERT INTO steps (id, step_id, run_id, agent_id, step_index, input_template, expects, status, created_at, updated_at, type)
+       VALUES (?, 'plan', ?, ?, 0, ?, 'STATUS: done', 'pending', ?, ?, 'single')`
+    ).run(stepId, runId, testAgentId, "TASK: {{task}}\nREPO: {{repo}}\nBRANCH: {{branch}}", now, now);
+
+    testRunIds.push(runId);
+    const result = claimStep(testAgentId);
+
+    assert.ok(result.found);
+    assert.ok(result.resolvedInput!.includes("BRANCH: nonexistent-branch"));
+  });
 });
